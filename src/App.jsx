@@ -105,9 +105,10 @@ export default function App() {
     setStatus("Saving…");
     try {
       const body = JSON.stringify(next);
-      await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: body }) });
+      const res = await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: body }) });
+      if (!res.ok) throw new Error("save failed");
       lastSaved.current = body; dirty.current = false; setStatus("Saved");
-    } catch (e) { setStatus("Save failed"); }
+    } catch (e) { setStatus("Save failed — retrying…"); }
   }, []);
 
   useEffect(() => {
@@ -400,18 +401,99 @@ function RepView({ rep, q, up, onDelRep }) {
           </div>); })}
       </Section>
 
+      <PathToGoal t={t} q={q} />
+
       <div className="rep-foot"><button className="ghost sm danger" onClick={onDelRep}>Remove rep</button></div>
     </div>
   );
 }
 
 /* ---------- deal card ---------- */
+const CATCHUP_RATE = 0.022; // assumed average take rate for the path-to-goal maths
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtDate = (d) => `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`;
+const isoDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+function PathToGoal({ t, q }) {
+  if (t.quota <= 0) return null;
+
+  if (t.gap <= 0) {
+    return (
+      <div className="section pathgoal ongoal">
+        <h2>Path to goal</h2>
+        <div className="pg-clear">On pace — forecast is {pct(t.attainment)} of goal, {money(-t.gap)} over. Keep activating early to bank every day of processing.</div>
+      </div>
+    );
+  }
+
+  const qStart = new Date(q.start + "T00:00:00");
+  const qEnd = new Date(q.end + "T00:00:00");
+  const today = new Date();
+  const start = today < qStart ? qStart : today;
+
+  const dates = [];
+  if (start < qEnd) {
+    dates.push(new Date(start));
+    let d = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+    while (d < qEnd) { dates.push(new Date(d)); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); }
+  }
+
+  const rows = dates.map((dt, i) => {
+    const m = monthsRemaining(isoDate(dt), q.start, q.end);
+    const gpv = m > 0.3 ? (t.gap * 12) / (CATCHUP_RATE * m) : null;
+    return { dt, m, gpv, asap: i === 0 };
+  });
+  const headline = rows.length ? rows[0].gpv : null;
+
+  return (
+    <div className="section pathgoal">
+      <h2>Path to goal</h2>
+      <p className="section-sub">
+        You're {money(t.gap)} short of your {money(t.quota)} goal ({pct(t.attainment, 0)} there). Revenue builds per day once a deal goes live, so the sooner you activate, the less new business it takes. Figures assume a {pct(CATCHUP_RATE, 1)} average take rate.
+      </p>
+
+      {headline != null && (
+        <div className="pg-headline">
+          <span className="pg-headline-label">Activate now and you're on goal with about</span>
+          <span className="pg-headline-val mono">{money(headline)}<span className="pg-unit">GPV</span></span>
+        </div>
+      )}
+
+      <div className="pg-rows">
+        {rows.map((r, i) => (
+          <div className={`pg-row ${r.asap ? "asap" : ""} ${r.gpv == null ? "late" : ""}`} key={i}>
+            <div className="pg-when">
+              <span className="pg-when-lead">{r.asap ? "Get live now" : `Get live by ${fmtDate(r.dt)}`}</span>
+              {r.m > 0 && <span className="pg-when-sub">{r.m.toFixed(1)} months of processing left this quarter</span>}
+            </div>
+            <div className="pg-need mono">
+              {r.gpv != null ? <>{money(r.gpv)} <span className="pg-unit">GPV</span></> : <span className="pg-toolate">too late to close the gap this quarter</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DealCard({ d, q, onPatch, onDel }) {
   const c = calcDeal(d, q), isFlat = d.model !== "costplus", live = d.stage === "live";
   return (
-    <div className={`deal ${live ? "islive" : ""}`}>
-      <div className="deal-top">
-        <input className="line-name big" placeholder="Deal name" value={d.name} onChange={(e) => onPatch({ name: e.target.value })} />
+    <div className={`deal ${live ? "islive" : "issigned"}`}>
+      <div className="deal-header">
+        <div className="deal-header-left">
+          <span className={`status-pill ${live ? "live" : "signed"}`}>{live ? "Live" : "Signed"}</span>
+          <input className="deal-name-in" placeholder="Untitled deal" value={d.name} onChange={(e) => onPatch({ name: e.target.value })} />
+        </div>
+        <div className="deal-header-right">
+          <div className="deal-forecast">
+            <span className="mini-label">{live ? "Banked" : "Forecast"}</span>
+            <span className={`deal-forecast-val mono ${live ? "good" : "warn"}`}>{money(c.contribution)}</span>
+          </div>
+          <button className="x" onClick={onDel} aria-label="Delete deal">×</button>
+        </div>
+      </div>
+      <div className="deal-controls">
         <div className="stage-toggle">
           <button className={!live ? "on" : ""} onClick={() => onPatch({ stage: "signed" })}>Signed</button>
           <button className={live ? "on live" : ""} onClick={() => onPatch({ stage: "live" })}>Live</button>
@@ -420,13 +502,11 @@ function DealCard({ d, q, onPatch, onDel }) {
           <button className={isFlat ? "on" : ""} onClick={() => onPatch({ model: "flat" })}>Flat/blended</button>
           <button className={!isFlat ? "on" : ""} onClick={() => onPatch({ model: "costplus" })}>Cost-plus</button>
         </div>
-        <button className="x" onClick={onDel}>×</button>
       </div>
       <DealFields d={d} isFlat={isFlat} live={live} onPatch={onPatch} />
       <div className="deal-calc">
         <Calc label="Eff. rate" v={pct(c.effRate, 3)} /><Calc label="Monthly" v={money(c.monthly)} />
         <Calc label="Months left" v={c.mr.toFixed(2)} /><Calc label="Quota credit" v={money(c.quotaCredit)} />
-        <Calc label={live ? "Banked" : "Forecast"} v={money(c.contribution)} strong tone={live ? "good" : "warn"} />
       </div>
       {live && <div className="live-note">Live — counts at 100%, banked toward goal.</div>}
     </div>
@@ -446,7 +526,7 @@ function DealFields({ d, isFlat, live, onPatch }) {
         <Field label="Cost to Square" suf="%" v={d.costToSquare} on={(v) => onPatch({ costToSquare: v })} hint="2.31" />
         <Field label="Cost+ margin" suf="%" v={d.costMargin} on={(v) => onPatch({ costMargin: v })} hint="0.10" />
       </>)}
-      <Field label="SaaS $/mo/loc" pre="$" v={d.saasPerMonth} on={(v) => onPatch({ saasPerMonth: v })} />
+      <Field label="Monthly SaaS amount (per location)" pre="$" v={d.saasPerMonth} on={(v) => onPatch({ saasPerMonth: v })} />
       <Field label="# locations" v={d.numLocations} on={(v) => onPatch({ numLocations: v })} />
       <label className="fld"><span className="mini-label">Go-live date</span><input type="date" value={d.goLive} onChange={(e) => onPatch({ goLive: e.target.value })} /></label>
       <Field label="Confidence" suf="%" v={d.confidence} on={(v) => onPatch({ confidence: v })} disabled={live} />
@@ -659,5 +739,39 @@ function Style() {
     .body{padding:18px 16px 40px} .rep-head{flex-direction:column} .model-cta{width:100%}
     .scratch-impact{text-align:left}
   }
+
+  /* deal card v2 — header strip + status stripe */
+  .deal{position:relative;overflow:hidden}
+  .deal.issigned{border-left:4px solid var(--warn)}
+  .deal.islive{border-left:4px solid var(--good)}
+  .deal-header{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:-2px 0 14px}
+  .deal-header-left{display:flex;align-items:center;gap:11px;flex:1;min-width:0}
+  .deal-header-right{display:flex;align-items:center;gap:16px}
+  .status-pill{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;padding:3px 9px;border-radius:20px;white-space:nowrap}
+  .status-pill.signed{background:var(--warn-soft);color:var(--warn)}
+  .status-pill.live{background:var(--good-soft);color:var(--good)}
+  .deal-name-in{border:none;border-bottom:1.5px solid transparent;font-family:'Space Grotesk';font-weight:600;font-size:17px;padding:3px 0;outline:none;background:transparent;color:var(--ink);width:100%;min-width:0}
+  .deal-name-in:focus{border-bottom-color:var(--accent)}
+  .deal-forecast{display:flex;flex-direction:column;align-items:flex-end;gap:1px}
+  .deal-forecast-val{font-size:19px;font-weight:600}
+  .deal-controls{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+  /* path to goal */
+  .pathgoal{background:#F7F9FC;border:1px solid var(--line);border-radius:14px;padding:20px 22px}
+  .pathgoal h2{margin-bottom:6px}
+  .pathgoal.ongoal{background:var(--good-soft);border-color:#C7E4D6}
+  .pg-clear{font-size:14px;color:var(--good);font-weight:500;margin-top:4px}
+  .pg-headline{display:flex;flex-direction:column;gap:3px;margin:6px 0 16px;padding:14px 16px;background:#fff;border:1px solid var(--line);border-radius:11px}
+  .pg-headline-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .pg-headline-val{font-size:30px;font-weight:600;color:var(--accent);display:flex;align-items:baseline;gap:8px}
+  .pg-unit{font-size:13px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+  .pg-rows{display:flex;flex-direction:column;gap:8px}
+  .pg-row{display:flex;justify-content:space-between;align-items:center;gap:14px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 15px}
+  .pg-row.asap{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+  .pg-row.late{opacity:.65}
+  .pg-when{display:flex;flex-direction:column;gap:2px}
+  .pg-when-lead{font-weight:600;font-family:'Space Grotesk';font-size:14px}
+  .pg-when-sub{font-size:11.5px;color:var(--muted)}
+  .pg-need{font-size:17px;font-weight:600;color:var(--ink);display:flex;align-items:baseline;gap:6px}
+  .pg-toolate{font-size:12.5px;color:var(--muted);font-weight:500}
   `}</style>);
 }
