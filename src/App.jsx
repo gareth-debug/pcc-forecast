@@ -47,7 +47,7 @@ function calcDeal(d, q) {
   return { effRate, totalAnnual, monthly, mr, quotaCredit, isLive, weighted, contribution: isLive ? quotaCredit : weighted };
 }
 function repTotals(rep, q) {
-  const carried = num(rep.carryTotal) + (rep.carried || []).reduce((s, c) => s + num(c.amount), 0);
+  const carried = num(rep.carryTotal);
   const loans = (rep.loans || []).reduce((s, l) => s + num(l.feeAmount) * LOAN_SHARE, 0);
   let live = 0, pipeline = 0;
   (rep.deals || []).forEach((d) => { const c = calcDeal(d, q); if (c.isLive) live += c.contribution; else pipeline += c.contribution; });
@@ -61,7 +61,7 @@ function currentQuarter() {
   const s = new Date(y, qi * 3, 1), e = new Date(y, qi * 3 + 3, 0), iso = (d) => d.toISOString().slice(0, 10);
   return { label: `Q${qi + 1} ${y}`, start: iso(s), end: iso(e) };
 }
-const mkRep = (code, name, quota) => ({ id: uid(), code, name, team: "Field", quota, carryTotal: "", carried: [], deals: [], loans: [] });
+const mkRep = (code, name, quota) => ({ id: uid(), code, name, team: "Field", quota, carryTotal: "", deals: [], loans: [] });
 function seedData() {
   return { quarter: currentQuarter(), reps: [
     mkRep("084093", "Whitaker, Della", 62000), mkRep("085168", "Agadzhanyan, David", 62000),
@@ -181,7 +181,10 @@ export default function App() {
 
       <div className="body">
         {tab === "master" || !activeRep ? (
-          <TeamView team={team} onPick={setTab} />
+          <TeamView team={team} onPick={setTab} onReset={() => {
+            const ans = prompt("This wipes ALL data for the whole team back to the starting roster at $0 — it cannot be undone.\n\nType RESET to confirm.");
+            if (ans && ans.trim().toUpperCase() === "RESET") { setData(seedData()); setTab("master"); }
+          }} />
         ) : (
           <RepView rep={activeRep} q={q}
             up={(fn) => update((d) => fn(d.reps.find((r) => r.id === activeRep.id)))}
@@ -239,7 +242,7 @@ function QuarterControl({ q, onChange }) {
 }
 
 /* ---------- master ---------- */
-function TeamView({ team, onPick }) {
+function TeamView({ team, onPick, onReset }) {
   return (
     <div className="view">
       <h1 className="view-title">Master view</h1>
@@ -270,6 +273,10 @@ function TeamView({ team, onPick }) {
           <div className="c-num mono warn">{money(team.pipeline)}</div><div className="c-num mono strong">{money(team.total)}</div>
           <div className="c-num mono">{pct(team.attainment, 0)}</div><div className="c-bar"><Bar banked={team.banked} pipeline={team.pipeline} quota={team.quota} /></div>
         </div>
+      </div>
+      <div className="team-foot">
+        <button className="ghost sm danger" onClick={onReset}>Reset all data</button>
+        <span className="team-foot-note">Clears every rep's deals, loans &amp; carry-in back to the starting roster at $0. Use to start a fresh quarter.</span>
       </div>
     </div>
   );
@@ -790,5 +797,8 @@ function Style() {
   .dollar.big input{border:none;outline:none;padding:11px 12px;width:100%;font-family:'JetBrains Mono';font-size:17px;font-weight:600;color:var(--ink);background:transparent}
   .carry-total-readout{display:flex;flex-direction:column;gap:3px;text-align:right;padding-bottom:6px}
   .carry-total-val{font-size:20px;font-weight:600}
+
+  .team-foot{display:flex;align-items:center;gap:14px;margin-top:16px;flex-wrap:wrap}
+  .team-foot-note{font-size:11.5px;color:var(--muted)}
   `}</style>);
 }
