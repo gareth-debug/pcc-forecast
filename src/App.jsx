@@ -47,7 +47,7 @@ function calcDeal(d, q) {
   return { effRate, totalAnnual, monthly, mr, quotaCredit, isLive, weighted, contribution: isLive ? quotaCredit : weighted };
 }
 function repTotals(rep, q) {
-  const carried = (rep.carried || []).reduce((s, c) => s + num(c.amount), 0);
+  const carried = num(rep.carryTotal) + (rep.carried || []).reduce((s, c) => s + num(c.amount), 0);
   const loans = (rep.loans || []).reduce((s, l) => s + num(l.feeAmount) * LOAN_SHARE, 0);
   let live = 0, pipeline = 0;
   (rep.deals || []).forEach((d) => { const c = calcDeal(d, q); if (c.isLive) live += c.contribution; else pipeline += c.contribution; });
@@ -61,7 +61,7 @@ function currentQuarter() {
   const s = new Date(y, qi * 3, 1), e = new Date(y, qi * 3 + 3, 0), iso = (d) => d.toISOString().slice(0, 10);
   return { label: `Q${qi + 1} ${y}`, start: iso(s), end: iso(e) };
 }
-const mkRep = (code, name, quota) => ({ id: uid(), code, name, team: "Field", quota, carried: [], deals: [], loans: [] });
+const mkRep = (code, name, quota) => ({ id: uid(), code, name, team: "Field", quota, carryTotal: "", carried: [], deals: [], loans: [] });
 function seedData() {
   return { quarter: currentQuarter(), reps: [
     mkRep("084093", "Whitaker, Della", 62000), mkRep("085168", "Agadzhanyan, David", 62000),
@@ -285,7 +285,6 @@ function RepView({ rep, q, up, onDelRep }) {
   const projTotal = t.total + scnContribution;
   const projAtt = t.quota ? projTotal / t.quota : 0;
 
-  const addCarried = () => up((r) => r.carried.push({ id: uid(), name: "", amount: "" }));
   const addDeal = () => up((r) => r.deals.push(blankDeal(q)));
   const addLoan = () => up((r) => r.loans.push({ id: uid(), name: "", feeAmount: "" }));
   const signScenario = () => {
@@ -369,17 +368,26 @@ function RepView({ rep, q, up, onDelRep }) {
         </div>
       )}
 
-      <Section title="Carrying into Q3" sub="Deals closed earlier that keep producing this quarter. Enter the Q3 revenue directly — counts fully." onAdd={addCarried} addLabel="+ Add closed deal">
-        {rep.carried.length === 0 && <Empty>Nothing carried in. Add anything closed before Q3 that still earns this quarter.</Empty>}
-        {rep.carried.map((c) => (
-          <div className="carry-row" key={c.id}>
-            <input className="line-name" placeholder="Deal / client name" value={c.name} onChange={(e) => up((r) => (r.carried.find((x) => x.id === c.id).name = e.target.value))} />
-            <label className="inline-field">Q3 revenue<span className="dollar"><i>$</i><input inputMode="decimal" value={c.amount} onChange={(e) => up((r) => (r.carried.find((x) => x.id === c.id).amount = e.target.value))} /></span></label>
-            <div className="contrib good mono">{money(num(c.amount))}</div>
-            <button className="x" onClick={() => up((r) => (r.carried = r.carried.filter((x) => x.id !== c.id)))}>×</button>
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <h2>Carrying into {q.label}</h2>
+            <p className="section-sub">Revenue from already-closed accounts still processing this quarter. Pull the single estimate from Looker — it counts fully toward goal, no need to list each deal.</p>
           </div>
-        ))}
-      </Section>
+        </div>
+        <div className="carry-total">
+          <label className="carry-total-field">
+            <span className="mini-label">Estimated {q.label} revenue from closed accounts</span>
+            <div className="dollar big"><i>$</i>
+              <input inputMode="decimal" placeholder="0" value={rep.carryTotal || ""} onChange={(e) => up((r) => (r.carryTotal = e.target.value))} />
+            </div>
+          </label>
+          <div className="carry-total-readout">
+            <span className="mini-label">Counts toward goal</span>
+            <span className="mono good carry-total-val">{money(num(rep.carryTotal))}</span>
+          </div>
+        </div>
+      </div>
 
       <Section title="Signed deals" sub="New wins. Weighted by confidence while pending; flip to Live when it goes live and it banks automatically — no re-entry." onAdd={addDeal} addLabel="+ Add deal">
         {rep.deals.length === 0 && <Empty>No deals yet. Add what you've signed to see where you land.</Empty>}
@@ -773,5 +781,14 @@ function Style() {
   .pg-when-sub{font-size:11.5px;color:var(--muted)}
   .pg-need{font-size:17px;font-weight:600;color:var(--ink);display:flex;align-items:baseline;gap:6px}
   .pg-toolate{font-size:12.5px;color:var(--muted);font-weight:500}
+
+  /* carrying-in single total */
+  .carry-total{display:flex;align-items:flex-end;gap:24px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;flex-wrap:wrap}
+  .carry-total-field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:260px}
+  .dollar.big{border-radius:9px}
+  .dollar.big i{padding:0 11px;font-size:14px}
+  .dollar.big input{border:none;outline:none;padding:11px 12px;width:100%;font-family:'JetBrains Mono';font-size:17px;font-weight:600;color:var(--ink);background:transparent}
+  .carry-total-readout{display:flex;flex-direction:column;gap:3px;text-align:right;padding-bottom:6px}
+  .carry-total-val{font-size:20px;font-weight:600}
   `}</style>);
 }
