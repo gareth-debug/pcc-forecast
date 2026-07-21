@@ -48,10 +48,12 @@ function calcDeal(d, q) {
 }
 function repTotals(rep, q) {
   const carried = num(rep.carryTotal);
-  const loans = (rep.loans || []).reduce((s, l) => s + num(l.feeAmount) * LOAN_SHARE, 0);
-  let live = 0, pipeline = 0;
-  (rep.deals || []).forEach((d) => { const c = calcDeal(d, q); if (c.isLive) live += c.contribution; else pipeline += c.contribution; });
-  const banked = carried + loans + live, total = banked + pipeline, quota = num(rep.quota);
+  const loans = (rep.loans || []).reduce((s, l) => s + num(l.revenue), 0);
+  let live = 0, dealPipeline = 0;
+  (rep.deals || []).forEach((d) => { const c = calcDeal(d, q); if (c.isLive) live += c.contribution; else dealPipeline += c.contribution; });
+  const banked = carried + live;
+  const pipeline = dealPipeline + loans;
+  const total = banked + pipeline, quota = num(rep.quota);
   return { carried, loans, live, pipeline, banked, total, quota,
     attainment: quota ? total / quota : 0, bankedAtt: quota ? banked / quota : 0, gap: quota - total };
 }
@@ -82,25 +84,15 @@ export default function App() {
 
   const dirty = useRef(false);
   const lastSaved = useRef("");
-
   const load = useCallback(async (initial) => {
     try {
       const res = await fetch("/api/data");
       const j = await res.json();
-      if (j && j.value) {
-        lastSaved.current = j.value;
-        if (!dirty.current) { setData(JSON.parse(j.value)); if (initial) setStatus("Saved"); }
-        return true;
-      }
+      if (j && j.value) { lastSaved.current = j.value; if (!dirty.current) { setData(JSON.parse(j.value)); if (initial) setStatus("Saved"); } return true; }
     } catch (e) {}
     return false;
   }, []);
-
-  useEffect(() => { (async () => {
-    const ok = await load(true);
-    if (!ok) { setData(seedData()); setStatus("Ready"); }
-  })(); }, [load]);
-
+  useEffect(() => { (async () => { const ok = await load(true); if (!ok) { setData(seedData()); setStatus("Ready"); } })(); }, [load]);
   const save = useCallback(async (next) => {
     setStatus("Saving…");
     try {
@@ -110,22 +102,8 @@ export default function App() {
       lastSaved.current = body; dirty.current = false; setStatus("Saved");
     } catch (e) { setStatus("Save failed — retrying…"); }
   }, []);
-
-  useEffect(() => {
-    if (!data) return;
-    dirty.current = JSON.stringify(data) !== lastSaved.current;
-    const t = setTimeout(() => { if (dirty.current) save(data); }, 700);
-    return () => clearTimeout(t);
-  }, [data, save]);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      const el = document.activeElement;
-      const editing = el && ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
-      if (!dirty.current && !editing) load(false);
-    }, 20000);
-    return () => clearInterval(id);
-  }, [load]);
+  useEffect(() => { if (!data) return; dirty.current = JSON.stringify(data) !== lastSaved.current; const t = setTimeout(() => { if (dirty.current) save(data); }, 700); return () => clearTimeout(t); }, [data, save]);
+  useEffect(() => { const id = setInterval(() => { const el = document.activeElement; const editing = el && ["INPUT","TEXTAREA","SELECT"].includes(el.tagName); if (!dirty.current && !editing) load(false); }, 20000); return () => clearInterval(id); }, [load]);
 
   const update = (fn) => setData((p) => { const n = JSON.parse(JSON.stringify(p)); fn(n); return n; });
   const q = data?.quarter, reps = data?.reps ?? [];
@@ -287,19 +265,19 @@ function RepView({ rep, q, up, onDelRep }) {
   const [scenario, setScenario] = useState(null);
   const t = repTotals(rep, q);
   const scnDeal = scenario ? calcDeal(scenario, q).contribution : 0;
-  const scnLoan = scenario && scenario.hasLoan ? num(scenario.loanFee) * LOAN_SHARE : 0;
+  const scnLoan = scenario && scenario.hasLoan ? num(scenario.loanRevenue) : 0;
   const scnContribution = scnDeal + scnLoan;
   const projTotal = t.total + scnContribution;
   const projAtt = t.quota ? projTotal / t.quota : 0;
 
   const addDeal = () => up((r) => r.deals.push(blankDeal(q)));
-  const addLoan = () => up((r) => r.loans.push({ id: uid(), name: "", feeAmount: "" }));
+  const addLoan = () => up((r) => r.loans.push({ id: uid(), name: "", revenue: "" }));
   const signScenario = () => {
     up((r) => {
-      const { hasLoan, loanFee, ...deal } = scenario;
+      const { hasLoan, loanRevenue, ...deal } = scenario;
       const dealReal = num(deal.gpv) > 0 || num(deal.flatRatePct) > 0 || num(deal.costToSquare) > 0;
       if (dealReal) r.deals.push({ ...deal, id: uid(), stage: "signed" });
-      if (hasLoan && num(loanFee) > 0) r.loans.push({ id: uid(), name: deal.name || "Loan", feeAmount: loanFee });
+      if (hasLoan && num(loanRevenue) > 0) r.loans.push({ id: uid(), name: deal.name || "Loan", revenue: loanRevenue });
     });
     setScenario(null);
   };
@@ -314,15 +292,16 @@ function RepView({ rep, q, up, onDelRep }) {
             <label>Q3 goal <span className="dollar"><i>$</i><input className="goal-in" inputMode="decimal" value={rep.quota} onChange={(e) => up((r) => (r.quota = e.target.value))} /></span></label>
           </div>
         </div>
-        <button className={`model-cta ${scenario ? "active" : ""}`} onClick={() => setScenario(scenario ? null : { ...blankDeal(q), name: "Prospect", confidence: 100, hasLoan: false, loanFee: "" })}>
+        <button className={`model-cta ${scenario ? "active" : ""}`} onClick={() => setScenario(scenario ? null : { ...blankDeal(q), name: "Prospect", confidence: 100, hasLoan: false, loanRevenue: "" })}>
           {scenario ? "Close scratchpad" : "＋ Model a deal"}
         </button>
       </div>
 
-      <div className="kpi-row four">
+      <div className="kpi-row five">
         <Kpi label="Total forecast" value={money(t.total)} tone="accent" />
         <Kpi label="Attainment" value={pct(t.attainment)} tone={t.attainment >= 1 ? "good" : ""} />
         <Kpi label="Banked now" value={money(t.banked)} tone="good" hint={`${pct(t.bankedAtt, 0)} of goal secured`} />
+        <Kpi label="From loans" value={money(t.loans)} hint="loan revenue — inside pipeline" />
         <Kpi label={t.gap >= 0 ? "Still to find" : "Over goal by"} value={money(Math.abs(t.gap))} tone={t.gap <= 0 ? "good" : "warn"} />
       </div>
 
@@ -330,7 +309,7 @@ function RepView({ rep, q, up, onDelRep }) {
         <Bar banked={t.banked} pipeline={t.pipeline} scenario={scnContribution} quota={t.quota} />
         <div className="hero-legend">
           <span><i className="sw good" /> Banked {money(t.banked)}</span>
-          <span><i className="sw warn" /> Pipeline {money(t.pipeline)}</span>
+          <span><i className="sw warn" /> Pipeline {money(t.pipeline)}{t.loans > 0 ? ` \u00b7 incl. ${money(t.loans)} loans` : ""}</span>
           {scenario && <span><i className="sw scn" /> If signed {money(scnContribution)}</span>}
           <span className="goal-lbl">Goal {money(t.quota)}</span>
         </div>
@@ -360,8 +339,8 @@ function RepView({ rep, q, up, onDelRep }) {
             </button>
             {scenario.hasLoan && (
               <div className="scratch-loan-row">
-                <label className="inline-field">Loan fee amount<span className="dollar"><i>$</i><input inputMode="decimal" value={scenario.loanFee} placeholder="0" onChange={(e) => setScenario({ ...scenario, loanFee: e.target.value })} /></span></label>
-                <div className="loan-credit-readout">You keep {pct(LOAN_SHARE, 0)} → <b className="mono good">{money(scnLoan)}</b> toward goal</div>
+                <label className="inline-field">Loan revenue amount (75% of fee)<span className="dollar"><i>$</i><input inputMode="decimal" value={scenario.loanRevenue} placeholder="0" onChange={(e) => setScenario({ ...scenario, loanRevenue: e.target.value })} /></span></label>
+                <div className="loan-credit-readout">Adds to pipeline → <b className="mono warn">{money(scnLoan)}</b></div>
               </div>
             )}
           </div>
@@ -369,7 +348,7 @@ function RepView({ rep, q, up, onDelRep }) {
             <span className="scratch-hint">Nothing here counts until you sign it. Adjust the terms — and the loan — and watch the number move.</span>
             <div>
               <button className="ghost sm" onClick={() => setScenario(null)}>Discard</button>
-              <button className="primary" onClick={signScenario}>{scenario.hasLoan && num(scenario.loanFee) > 0 ? "Sign it — add deal + loan" : "Sign it — add to pipeline"}</button>
+              <button className="primary" onClick={signScenario}>{scenario.hasLoan && num(scenario.loanRevenue) > 0 ? "Sign it — add deal + loan" : "Sign it — add to pipeline"}</button>
             </div>
           </div>
         </div>
@@ -405,15 +384,16 @@ function RepView({ rep, q, up, onDelRep }) {
         ))}
       </Section>
 
-      <Section title="Loans" sub={`You keep ${pct(LOAN_SHARE, 0)} of each loan fee, straight to your number.`} onAdd={addLoan} addLabel="+ Add loan">
+      <Section title="Loans" sub="Enter the loan revenue amount — that's 75% of the loan fee. Counts toward pipeline." onAdd={addLoan} addLabel="+ Add loan">
         {rep.loans.length === 0 && <Empty>No loans logged.</Empty>}
-        {rep.loans.map((l) => { const credit = num(l.feeAmount) * LOAN_SHARE; return (
+        {rep.loans.map((l) => (
           <div className="carry-row" key={l.id}>
             <input className="line-name" placeholder="Loan / client name" value={l.name} onChange={(e) => up((r) => (r.loans.find((x) => x.id === l.id).name = e.target.value))} />
-            <label className="inline-field">Loan fee<span className="dollar"><i>$</i><input inputMode="decimal" value={l.feeAmount} onChange={(e) => up((r) => (r.loans.find((x) => x.id === l.id).feeAmount = e.target.value))} /></span></label>
-            <div className="contrib good mono">{money(credit)}<span className="contrib-sub">75%</span></div>
+            <label className="inline-field">Loan revenue (75% of fee)<span className="dollar"><i>$</i><input inputMode="decimal" value={l.revenue} onChange={(e) => up((r) => (r.loans.find((x) => x.id === l.id).revenue = e.target.value))} /></span></label>
+            <div className="contrib warn mono">{money(num(l.revenue))}</div>
             <button className="x" onClick={() => up((r) => (r.loans = r.loans.filter((x) => x.id !== l.id)))}>×</button>
-          </div>); })}
+          </div>
+        ))}
       </Section>
 
       <PathToGoal t={t} q={q} />
@@ -800,5 +780,9 @@ function Style() {
 
   .team-foot{display:flex;align-items:center;gap:14px;margin-top:16px;flex-wrap:wrap}
   .team-foot-note{font-size:11.5px;color:var(--muted)}
+
+  .kpi-row.five{grid-template-columns:repeat(5,1fr)}
+  @media(max-width:1000px){ .kpi-row.five{grid-template-columns:repeat(2,1fr)} }
+  .contrib.warn{color:var(--warn)}
   `}</style>);
 }
