@@ -47,11 +47,16 @@ function calcDeal(d, q) {
 function repTotals(rep, q) {
   const carried = num(rep.carryTotal);
   const loans = (rep.loans || []).reduce((s, l) => s + num(l.revenue), 0);
-  const dealPipeline = (rep.deals || []).filter((d) => !d.activated).reduce((s, d) => s + calcDeal(d, q).contribution, 0);
+  const today = isoDate(new Date());
+  let dealPipeline = 0, overdue = 0;
+  (rep.deals || []).filter((d) => !d.activated).forEach((d) => {
+    const c = calcDeal(d, q).contribution;
+    if (d.goLive && d.goLive < today) overdue += c; else dealPipeline += c;
+  });
   const banked = carried;
-  const pipeline = dealPipeline + loans;
+  const pipeline = dealPipeline + overdue + loans;
   const total = banked + pipeline, quota = num(rep.quota);
-  return { carried, loans, live: 0, pipeline, banked, total, quota,
+  return { carried, loans, live: 0, pipeline, overdue, banked, total, quota,
     attainment: quota ? total / quota : 0, bankedAtt: quota ? banked / quota : 0, gap: quota - total };
 }
 
@@ -363,17 +368,20 @@ function MonthCell({ label, prospect, signed, live, target, overdue = 0 }) {
 }
 
 /* ---------- bar ---------- */
-function Bar({ banked, pipeline, scenario = 0, quota, slim }) {
+function Bar({ banked, pipeline, overdue = 0, scenario = 0, quota, slim }) {
   const q = quota || 1;
+  const amber = Math.max(0, pipeline - overdue);
   const b = Math.min((banked / q) * 100, 100);
-  const p = Math.min((pipeline / q) * 100, Math.max(0, 100 - b));
-  const s = Math.min((scenario / q) * 100, Math.max(0, 100 - b - p));
+  const p = Math.min((amber / q) * 100, Math.max(0, 100 - b));
+  const o = Math.min((overdue / q) * 100, Math.max(0, 100 - b - p));
+  const s = Math.min((scenario / q) * 100, Math.max(0, 100 - b - p - o));
   return (
     <div className={`bar ${slim ? "slim" : ""}`}>
       <div className="bar-track">
         <div className="seg banked" style={{ width: `${b}%` }} />
         <div className="seg pipeline" style={{ left: `${b}%`, width: `${p}%` }} />
-        {scenario > 0 && <div className="seg scenario" style={{ left: `${b + p}%`, width: `${s}%` }} />}
+        {overdue > 0 && <div className="seg overdue" style={{ left: `${b + p}%`, width: `${o}%` }} />}
+        {scenario > 0 && <div className="seg scenario" style={{ left: `${b + p + o}%`, width: `${s}%` }} />}
         <div className="goal" />
       </div>
     </div>
@@ -451,7 +459,7 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
             <div className="c-num mono">{money(t.quota)}</div><div className="c-num mono good">{money(t.banked)}</div>
             <div className="c-num mono warn">{money(t.pipeline)}</div><div className="c-num mono strong">{money(t.total)}</div>
             <div className={`c-num mono ${t.attainment >= 1 ? "good" : ""}`}>{pct(t.attainment, 0)}</div>
-            <div className="c-bar"><Bar banked={t.banked} pipeline={t.pipeline} quota={t.quota} /></div>
+            <div className="c-bar"><Bar banked={t.banked} pipeline={t.pipeline} overdue={t.overdue} quota={t.quota} /></div>
           </div>
         ))}
         <div className="row total">
@@ -564,10 +572,11 @@ function RepView({ rep, q, up, onDelRep, readOnly }) {
       </div>
 
       <div className="herobar">
-        <Bar banked={t.banked} pipeline={t.pipeline} scenario={scnContribution} quota={t.quota} />
+        <Bar banked={t.banked} pipeline={t.pipeline} overdue={t.overdue} scenario={scnContribution} quota={t.quota} />
         <div className="hero-legend">
           <span><i className="sw good" /> Banked {money(t.banked)}</span>
-          <span><i className="sw warn" /> Pipeline {money(t.pipeline)}{t.loans > 0 ? ` · incl. ${money(t.loans)} loans` : ""}</span>
+          <span><i className="sw warn" /> Pipeline {money(Math.max(0, t.pipeline - t.overdue))}{t.loans > 0 ? ` · incl. ${money(t.loans)} loans` : ""}</span>
+          {t.overdue > 0 && <span><i className="sw atrisk" /> At risk {money(t.overdue)} <span className="muted">— past go-live</span></span>}
           {scenario && <span><i className="sw scn" /> If signed {money(scnContribution)}</span>}
           <span className="goal-lbl">Goal {money(t.quota)}</span>
         </div>
@@ -991,6 +1000,8 @@ function Style() {
   .herobar{border:1px solid var(--line);border-radius:13px;padding:18px 20px 15px;margin-bottom:26px;background:#fff}
   .hero-legend{display:flex;gap:22px;margin-top:14px;font-size:12px;color:var(--muted);align-items:center;flex-wrap:wrap}
   .hero-legend .sw,.legend-row .sw{width:11px;height:11px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:-1px}
+  .seg.overdue{background:var(--danger)}
+  .hero-legend .muted{color:var(--muted)}
   .sw.good{background:var(--good)} .sw.warn{background:var(--warn)} .sw.scn{background:var(--scn)}
   .goal-lbl{margin-left:auto;font-family:'JetBrains Mono';color:var(--ink);font-weight:600}
   /* scratchpad */
