@@ -155,14 +155,23 @@ export default function App() {
       });
       return { m, prospect, signed, live };
     });
-    const movers = [];
+    // unified upcoming list: every not-yet-live deal (signed) + prospect, with overdue flag
+    const todayIso = isoDate(new Date());
+    const upcoming = [];
     reps.forEach((r) => {
-      (r.deals || []).forEach((d) => { if (!d.activated && num(d.gpv) > 0) movers.push({ name: d.name || "Untitled", rep: r.name, gpv: num(d.gpv), goLive: d.goLive, kind: "signed" }); });
-      (r.prospects || []).forEach((p) => { if (num(p.gpv) > 0) movers.push({ name: p.name || "Prospect", rep: r.name, gpv: num(p.gpv), goLive: p.goLive, kind: "prospect" }); });
+      (r.deals || []).forEach((d) => { if (!d.activated && num(d.gpv) > 0) upcoming.push({ name: d.name || "Untitled", rep: r.name, repFirst: (r.name || "").split(",")[0], gpv: num(d.gpv), goLive: d.goLive, kind: "signed", overdue: !!(d.goLive && d.goLive < todayIso) }); });
+      (r.prospects || []).forEach((p) => { if (num(p.gpv) > 0) upcoming.push({ name: p.name || "Prospect", rep: r.name, repFirst: (r.name || "").split(",")[0], gpv: num(p.gpv), goLive: p.goLive, kind: "prospect", overdue: !!(p.goLive && p.goLive < todayIso) }); });
     });
-    movers.sort((a, b) => b.gpv - a.gpv);
+    upcoming.sort((a, b) => (a.goLive || "9999") < (b.goLive || "9999") ? -1 : 1);
+    const overdueCount = upcoming.filter((u) => u.overdue).length;
+    const overdueGpv = upcoming.filter((u) => u.overdue).reduce((s, u) => s + u.gpv, 0);
+    // mark which quarter-months contain an overdue deal (for the red bar marker)
+    const overdueMonths = {};
+    upcoming.forEach((u) => { if (u.overdue) { const k = monthKey(u.goLive); if (k != null) overdueMonths[k] = true; } });
+    const movers = [...upcoming].sort((a, b) => b.gpv - a.gpv);
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
-      teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length };
+      teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length,
+      upcoming, overdueCount, overdueGpv, overdueMonths, todayIso };
   }, [data, viewId]);
 
   const editQuarter = (nq) => update((d, cq) => { cq.label = nq.label; cq.start = nq.start; cq.end = nq.end; });
@@ -247,8 +256,77 @@ export default function App() {
   );
 }
 
+/* ---------- activation window (manager view) ---------- */
+function ActivationWindow({ upcoming, todayIso }) {
+  const [range, setRange] = useState("month");
+  const today = new Date(todayIso + "T00:00:00");
+  const addDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // window end (inclusive) for each range
+  let end = null;
+  if (range === "week") end = iso(addDays(7));
+  else if (range === "nextweek") end = iso(addDays(14));
+  else if (range === "month") end = iso(new Date(today.getFullYear(), today.getMonth() + 1, 0));
+  const startOfNextWeek = iso(addDays(7));
+
+  const inRange = (u) => {
+    if (!u.goLive) return false;
+    if (u.overdue) return false; // overdue handled separately
+    if (range === "all") return u.goLive >= todayIso;
+    if (range === "nextweek") return u.goLive >= startOfNextWeek && u.goLive <= end;
+    return u.goLive >= todayIso && u.goLive <= end;
+  };
+  const list = upcoming.filter(inRange);
+  const overdue = upcoming.filter((u) => u.overdue);
+  const tabs = [["week", "This week"], ["nextweek", "Next week"], ["month", "This month"], ["all", "All upcoming"]];
+  const totalGpv = list.reduce((s, u) => s + u.gpv, 0);
+
+  return (
+    <div className="aw">
+      <div className="aw-head">
+        <div className="pg-sub-head">Deals set to activate</div>
+        <div className="aw-tabs">
+          {tabs.map(([k, lbl]) => (
+            <button key={k} className={`aw-tab ${range === k ? "on" : ""}`} onClick={() => setRange(k)}>{lbl}</button>
+          ))}
+        </div>
+      </div>
+
+      {overdue.length > 0 && (
+        <div className="aw-overdue">
+          <div className="aw-overdue-label">Overdue — go-live date has passed, needs a new date</div>
+          {overdue.map((u, i) => (
+            <div className="aw-row overdue" key={"o" + i}>
+              <span className="aw-name">{u.name} <span className={`aw-kind ${u.kind}`}>{u.kind}</span></span>
+              <span className="aw-rep">{u.repFirst}</span>
+              <span className="aw-date">{u.goLive}</span>
+              <span className="aw-gpv mono">{money(u.gpv)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {list.length === 0 ? (
+        <div className="aw-empty">Nothing dated to go live in this window.</div>
+      ) : (
+        <>
+          {list.map((u, i) => (
+            <div className="aw-row" key={i}>
+              <span className="aw-name">{u.name} <span className={`aw-kind ${u.kind}`}>{u.kind}</span></span>
+              <span className="aw-rep">{u.repFirst}</span>
+              <span className="aw-date">{u.goLive}</span>
+              <span className="aw-gpv mono">{money(u.gpv)}</span>
+            </div>
+          ))}
+          <div className="aw-total">{list.length} deal{list.length > 1 ? "s" : ""} · {money(totalGpv)} GPV lined up</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ---------- month cell (3-tier go-live bar) ---------- */
-function MonthCell({ label, prospect, signed, live, target }) {
+function MonthCell({ label, prospect, signed, live, target, overdue }) {
   const total = prospect + signed + live;
   let used = 0;
   const lw = Math.min((live / target) * 100, 100); used += lw;
@@ -262,11 +340,12 @@ function MonthCell({ label, prospect, signed, live, target }) {
         <span className="month-name">{label}</span>
         <span className={`month-gpv mono ${liveHit ? "good" : "warn"}`}>{money(total)}</span>
       </div>
-      <div className="month-bar">
+      <div className={`month-bar ${overdue ? "has-overdue" : ""}`}>
         <div className="month-fill live" style={{ left: 0, width: `${lw}%` }} />
         <div className="month-fill signed" style={{ left: `${lw}%`, width: `${sw}%` }} />
         <div className="month-fill prospect" style={{ left: `${lw + sw}%`, width: `${pw}%` }} />
         <div className="month-goal" />
+        {overdue && <span className="month-overdue-flag" title="A deal here has a past go-live date">!</span>}
       </div>
       <div className="month-note">
         <span className="good">{money(live)} live</span> · <span className="warn">{money(signed)} signed</span> · <span className="muted">{money(prospect)} prospect</span>
@@ -381,11 +460,16 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
             <p className="section-sub">Everyone's deals and prospects, by go-live month. Green = live (locked), solid amber = signed, hatched = prospect. Team line is {money(4000000)} × {team.repCount} reps = {money(team.teamTarget)}/month.</p>
           </div>
         </div>
+        {team.overdueCount > 0 && (
+          <div className="overdue-badge">⚠ {team.overdueCount} deal{team.overdueCount > 1 ? "s" : ""} past their go-live date ({money(team.overdueGpv)} GPV) — dates need updating</div>
+        )}
         <div className="month-strip team">
           {team.monthData.map((md, i) => (
-            <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={team.teamTarget} />
+            <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={team.teamTarget} overdue={!!team.overdueMonths[md.m.getFullYear() * 12 + md.m.getMonth()]} />
           ))}
         </div>
+
+        <ActivationWindow upcoming={team.upcoming} todayIso={team.todayIso} />
 
         {team.movers.length > 0 && (
           <div className="tg-movers">
@@ -701,27 +785,28 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
 
       <div className="pg-prospects">
         <div className="pg-prospects-head">
-          <div className="pg-sub-head">Which deals will get you there? {behind ? `Add prospects to close the ${money(t.gap)} gap — the “closes” figure reflects each deal's go-live date.` : "Track the prospects you're chasing."}</div>
+          <div className="pg-sub-head">Which deals will get you there? Add the prospects you're chasing — each one's GPV feeds the go-live month it's dated to (shown in the bars above).</div>
           {onAddProspect && <button className="ghost sm" onClick={onAddProspect}>+ Add prospect</button>}
         </div>
-        {list.length === 0 && <div className="pg-prospects-empty">No prospects yet. Add GPV + an expected go-live date — a later date closes less of your gap.</div>}
+        {list.length === 0 && <div className="pg-prospects-empty">No prospects yet. Add each one's GPV and an expected go-live date — it drops into that month's go-live bar above.</div>}
         {list.map((p) => {
-          const rev = revFromGpv(p.gpv, p.goLive);
+          const mk = monthKey(p.goLive);
+          const monthLabel = mk != null ? `${MONTHS_SHORT[new Date(p.goLive + "T00:00:00").getMonth()]} ${new Date(p.goLive + "T00:00:00").getFullYear()}` : null;
           return (
             <div className="prospect-row" key={p.id}>
               <input className="line-name" placeholder="Prospect / opp name" value={p.name} onChange={(e) => onPatchProspect(p.id, { name: e.target.value })} />
               <label className="inline-field">GPV<span className="dollar"><i>$</i><input inputMode="decimal" value={p.gpv} onChange={(e) => onPatchProspect(p.id, { gpv: e.target.value })} /></span></label>
               <label className="inline-field">Est. go-live<input type="date" className="prospect-date" value={p.goLive || ""} onChange={(e) => onPatchProspect(p.id, { goLive: e.target.value })} /></label>
-              <div className="prospect-rev"><span className="mini-label">closes</span><span className="mono good">{money(rev)}</span></div>
+              <div className="prospect-added">{monthLabel ? <><span className="tick">✓</span> added to {monthLabel}</> : <span className="muted">add a date</span>}</div>
               {onPromoteProspect && <button className="promote-btn" onClick={() => onPromoteProspect(p.id)} title="Move to signed deals">→ Sign</button>}
               <button className="x" onClick={() => onDelProspect(p.id)} aria-label="Delete prospect">×</button>
             </div>
           );
         })}
-        {behind && list.length > 0 && (
+        {list.length > 0 && (
           <div className="pg-prospect-totals">
-            <span>Prospects close <b className="mono">{money(prospectRev)}</b> of your {money(t.gap)} gap</span>
-            <span className={gapRemaining <= 0 ? "good strong" : "warn strong"}>{gapRemaining <= 0 ? `Gap covered — ${money(-gapRemaining)} to spare` : `${money(gapRemaining)} still to close`}</span>
+            <span>Prospects add <b className="mono">{money(list.reduce((s, p) => s + num(p.gpv), 0))}</b> GPV</span>
+            <span className="muted">counted in the monthly bars above by go-live date</span>
           </div>
         )}
       </div>
@@ -1065,8 +1150,9 @@ function Style() {
   .pg-prospects-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:10px}
   .pg-prospects-empty{font-size:12.5px;color:var(--muted);padding:6px 0}
   .prospect-row{display:grid;grid-template-columns:1fr auto auto auto auto auto;gap:12px;align-items:end;padding:10px 0;border-top:1px solid var(--line2)}
-  .prospect-rev{display:flex;flex-direction:column;gap:2px;text-align:right;min-width:90px}
-  .prospect-rev .mono{font-size:14px;font-weight:600}
+  .prospect-added{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--good);font-weight:600;min-width:120px;justify-content:flex-end}
+  .prospect-added .tick{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:50%;background:var(--good);color:#fff;font-size:11px}
+  .prospect-added .muted{color:var(--muted);font-weight:500}
   .prospect-date{border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-family:'JetBrains Mono';font-size:12px;background:#FBFCFD;color:var(--ink)}
   .pg-prospect-totals{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:12px;padding-top:12px;border-top:1.5px solid var(--line);font-size:13.5px;flex-wrap:wrap}
   .pg-prospect-totals .strong{font-weight:600}
@@ -1135,5 +1221,27 @@ function Style() {
   .sw.live{background:var(--good)} .sw.signed{background:var(--warn)}
   .sw.prospect{background:repeating-linear-gradient(45deg,#E9B865,#E9B865 3px,#F6DDAE 3px,#F6DDAE 6px)}
   .month-note .muted{color:var(--muted)}
+
+  .overdue-badge{background:#FBECEA;border:1px solid #E7C3BE;color:var(--danger);border-radius:10px;padding:10px 14px;font-size:13px;font-weight:600;margin-bottom:14px}
+  .month-bar.has-overdue{box-shadow:0 0 0 1.5px var(--danger)}
+  .month-overdue-flag{position:absolute;top:-7px;right:-6px;width:16px;height:16px;border-radius:50%;background:var(--danger);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;line-height:1}
+  .aw{margin-top:22px}
+  .aw-head{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+  .aw-tabs{display:flex;background:#EEF0F3;border-radius:9px;padding:2px}
+  .aw-tab{border:none;background:transparent;padding:7px 13px;border-radius:7px;font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer;font-family:'Inter'}
+  .aw-tab.on{background:#fff;color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .aw-row{display:grid;grid-template-columns:1fr auto auto auto;gap:14px;align-items:center;padding:10px 14px;border:1px solid var(--line);border-radius:10px;margin-bottom:7px;background:#fff}
+  .aw-row.overdue{border-color:#E7C3BE;background:#FCF3F1}
+  .aw-name{font-weight:600;font-family:'Space Grotesk';font-size:14px}
+  .aw-kind{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px;margin-left:6px}
+  .aw-kind.signed{background:var(--warn-soft);color:var(--warn)} .aw-kind.prospect{background:var(--accent-soft);color:var(--accent)}
+  .aw-rep{font-size:12.5px;color:var(--muted);font-weight:600}
+  .aw-date{font-family:'JetBrains Mono';font-size:12.5px;color:var(--ink)}
+  .aw-row.overdue .aw-date{color:var(--danger);font-weight:600}
+  .aw-gpv{font-weight:600;font-size:14px;text-align:right;min-width:90px}
+  .aw-total{font-size:12.5px;color:var(--muted);margin-top:8px;font-weight:600}
+  .aw-empty{font-size:13px;color:var(--muted);padding:12px 0}
+  .aw-overdue{margin-bottom:12px}
+  .aw-overdue-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--danger);font-weight:700;margin-bottom:7px}
   `}</style>);
 }
