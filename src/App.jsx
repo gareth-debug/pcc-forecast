@@ -42,19 +42,16 @@ function calcDeal(d, q) {
   const saasRev = num(d.saasPerMonth) * num(d.numLocations) * num(d.monthsActive || 12);
   const totalAnnual = gpvRev + saasRev, monthly = totalAnnual / 12;
   const mr = monthsRemaining(d.goLive, q.start, q.end), quotaCredit = monthly * mr;
-  const isLive = d.stage === "live";
-  const weighted = quotaCredit * (num(d.confidence) / 100);
-  return { effRate, totalAnnual, monthly, mr, quotaCredit, isLive, weighted, contribution: isLive ? quotaCredit : weighted };
+  return { effRate, totalAnnual, monthly, mr, quotaCredit, contribution: quotaCredit * (num(d.confidence) / 100) };
 }
 function repTotals(rep, q) {
   const carried = num(rep.carryTotal);
   const loans = (rep.loans || []).reduce((s, l) => s + num(l.revenue), 0);
-  let live = 0, dealPipeline = 0;
-  (rep.deals || []).forEach((d) => { const c = calcDeal(d, q); if (c.isLive) live += c.contribution; else dealPipeline += c.contribution; });
-  const banked = carried + live;
+  const dealPipeline = (rep.deals || []).filter((d) => !d.activated).reduce((s, d) => s + calcDeal(d, q).contribution, 0);
+  const banked = carried;
   const pipeline = dealPipeline + loans;
   const total = banked + pipeline, quota = num(rep.quota);
-  return { carried, loans, live, pipeline, banked, total, quota,
+  return { carried, loans, live: 0, pipeline, banked, total, quota,
     attainment: quota ? total / quota : 0, bankedAtt: quota ? banked / quota : 0, gap: quota - total };
 }
 
@@ -63,14 +60,36 @@ function currentQuarter() {
   const s = new Date(y, qi * 3, 1), e = new Date(y, qi * 3 + 3, 0), iso = (d) => d.toISOString().slice(0, 10);
   return { label: `Q${qi + 1} ${y}`, start: iso(s), end: iso(e) };
 }
-const mkRep = (code, name, quota) => ({ id: uid(), code, name, team: "Field", quota, carryTotal: "", deals: [], loans: [] });
-function seedData() {
-  return { quarter: currentQuarter(), reps: [
-    mkRep("084093", "Whitaker, Della", 62000), mkRep("085168", "Agadzhanyan, David", 62000),
+const mkRep = (code, name, quota) => ({ id: uid(), code, name, team: "Field", quota, carryTotal: "", deals: [], loans: [], prospects: [] });
+const slug = (s) => (s || "q").toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+function nextQuarter(afterEndIso) {
+  const e = new Date((afterEndIso || currentQuarter().end) + "T00:00:00");
+  const ns = new Date(e.getFullYear(), e.getMonth() + 1, 1);
+  const qi = Math.floor(ns.getMonth() / 3);
+  const start = new Date(ns.getFullYear(), qi * 3, 1);
+  const end = new Date(ns.getFullYear(), qi * 3 + 3, 0);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  return { label: `Q${qi + 1} ${start.getFullYear()}`, start: iso(start), end: iso(end) };
+}
+function seedRoster() {
+  return [
+    mkRep("085168", "Agadzhanyan, David", 62000),
     mkRep("085422", "Wadhams, Ryan", 66000), mkRep("088515", "Woods, Tacen", 33000),
     mkRep("089562", "Wichman, Zachariah", 16500), mkRep("089968", "Heathcott, Aubrey", 16500),
     mkRep("090964", "Lemus, Wilmer", 5166.67), mkRep("090987", "Millet, Joey", 5166.67),
-  ] };
+  ];
+}
+function seedData() {
+  const cq = currentQuarter();
+  const id = slug(cq.label);
+  return { activeId: id, quarters: [{ id, label: cq.label, start: cq.start, end: cq.end, archived: false, reps: seedRoster() }] };
+}
+function migrate(d) {
+  if (!d) return seedData();
+  if (Array.isArray(d.quarters)) return d;
+  const qq = d.quarter || currentQuarter();
+  const id = slug(qq.label);
+  return { activeId: id, quarters: [{ id, label: qq.label, start: qq.start, end: qq.end, archived: false, reps: d.reps || seedRoster() }] };
 }
 const blankDeal = (q) => ({ id: uid(), name: "", stage: "signed", model: "flat",
   gpv: "", avgTxn: "", flatRatePct: "", flatFixedFee: "", costToSquare: "", costMargin: "",
@@ -80,6 +99,7 @@ const blankDeal = (q) => ({ id: uid(), name: "", stage: "signed", model: "flat",
 export default function App() {
   const [data, setData] = useState(null);
   const [tab, setTab] = useState("master");
+  const [viewId, setViewId] = useState(null);
   const [status, setStatus] = useState("Loading…");
 
   const dirty = useRef(false);
@@ -88,11 +108,11 @@ export default function App() {
     try {
       const res = await fetch("/api/data");
       const j = await res.json();
-      if (j && j.value) { lastSaved.current = j.value; if (!dirty.current) { setData(JSON.parse(j.value)); if (initial) setStatus("Saved"); } return true; }
+      if (j && j.value) { lastSaved.current = j.value; if (!dirty.current) { const m = migrate(JSON.parse(j.value)); setData(m); setViewId((v) => v || m.activeId); if (initial) setStatus("Saved"); } return true; }
     } catch (e) {}
     return false;
   }, []);
-  useEffect(() => { (async () => { const ok = await load(true); if (!ok) { setData(seedData()); setStatus("Ready"); } })(); }, [load]);
+  useEffect(() => { (async () => { const ok = await load(true); if (!ok) { const s = seedData(); setData(s); setViewId(s.activeId); setStatus("Ready"); } })(); }, [load]);
   const save = useCallback(async (next) => {
     setStatus("Saving…");
     try {
@@ -105,20 +125,74 @@ export default function App() {
   useEffect(() => { if (!data) return; dirty.current = JSON.stringify(data) !== lastSaved.current; const t = setTimeout(() => { if (dirty.current) save(data); }, 700); return () => clearTimeout(t); }, [data, save]);
   useEffect(() => { const id = setInterval(() => { const el = document.activeElement; const editing = el && ["INPUT","TEXTAREA","SELECT"].includes(el.tagName); if (!dirty.current && !editing) load(false); }, 20000); return () => clearInterval(id); }, [load]);
 
-  const update = (fn) => setData((p) => { const n = JSON.parse(JSON.stringify(p)); fn(n); return n; });
-  const q = data?.quarter, reps = data?.reps ?? [];
+  const activeQ = data ? (data.quarters.find((x) => x.id === data.activeId) || data.quarters[0]) : null;
+  const vId = viewId || data?.activeId;
+  const viewedQ = data ? (data.quarters.find((x) => x.id === vId) || activeQ) : null;
+  const readOnly = !!(data && viewedQ && viewedQ.id !== data.activeId);
+  const q = viewedQ ? { label: viewedQ.label, start: viewedQ.start, end: viewedQ.end } : null;
+  const reps = viewedQ ? viewedQ.reps : [];
   const activeRep = reps.find((r) => r.id === tab);
 
+  const update = (fn) => {
+    if (readOnly) return;
+    setData((p) => { const n = JSON.parse(JSON.stringify(p)); const cq = n.quarters.find((x) => x.id === n.activeId); fn(n, cq); return n; });
+  };
+
   const team = useMemo(() => {
-    if (!data) return null;
+    if (!data || !viewedQ) return null;
     const rows = reps.map((r) => ({ rep: r, t: repTotals(r, q) }));
     const sum = (k) => rows.reduce((s, x) => s + x.t[k], 0);
     const quota = sum("quota"), banked = sum("banked"), pipeline = sum("pipeline"), total = banked + pipeline;
-    return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total };
-  }, [data]);
+    const MONTH_TARGET = 4000000;
+    const teamTarget = MONTH_TARGET * reps.length;
+    const months = quarterMonths(q.start, q.end);
+    const monthData = months.map((m) => {
+      const key = m.getFullYear() * 12 + m.getMonth();
+      let prospect = 0, signed = 0, live = 0;
+      reps.forEach((r) => {
+        (r.deals || []).forEach((d) => { if (monthKey(d.goLive) === key) { if (d.activated) live += num(d.gpv); else signed += num(d.gpv); } });
+        (r.prospects || []).forEach((p) => { if (monthKey(p.goLive) === key) prospect += num(p.gpv); });
+      });
+      return { m, prospect, signed, live };
+    });
+    const movers = [];
+    reps.forEach((r) => {
+      (r.deals || []).forEach((d) => { if (!d.activated && num(d.gpv) > 0) movers.push({ name: d.name || "Untitled", rep: r.name, gpv: num(d.gpv), goLive: d.goLive, kind: "signed" }); });
+      (r.prospects || []).forEach((p) => { if (num(p.gpv) > 0) movers.push({ name: p.name || "Prospect", rep: r.name, gpv: num(p.gpv), goLive: p.goLive, kind: "prospect" }); });
+    });
+    movers.sort((a, b) => b.gpv - a.gpv);
+    return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
+      teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length };
+  }, [data, viewId]);
+
+  const editQuarter = (nq) => update((d, cq) => { cq.label = nq.label; cq.start = nq.start; cq.end = nq.end; });
+
+  const closeQuarter = () => {
+    const nq = nextQuarter(activeQ.end);
+    if (!window.confirm(`Close ${activeQ.label} and start ${nq.label}?\n\n${activeQ.label} becomes read-only (still viewable in the dropdown). Everyone starts fresh at $0 for ${nq.label} — goals carry over so you can adjust them.`)) return;
+    setData((p) => {
+      const n = JSON.parse(JSON.stringify(p));
+      const cur = n.quarters.find((x) => x.id === n.activeId); if (cur) cur.archived = true;
+      const newId = slug(nq.label) + "-" + Math.random().toString(36).slice(2, 5);
+      const base = cur ? cur.reps : seedRoster();
+      const freshReps = base.map((r) => ({ id: uid(), code: r.code, name: r.name, team: r.team, quota: r.quota, carryTotal: "", deals: [], loans: [], prospects: [] }));
+      n.quarters.push({ id: newId, label: nq.label, start: nq.start, end: nq.end, archived: false, reps: freshReps });
+      n.activeId = newId;
+      return n;
+    });
+    setViewId(null); setTab("master");
+  };
+
+  const resetCurrent = () => {
+    const ans = window.prompt(`This wipes ${activeQ.label} back to the starting roster at $0 — it cannot be undone (archived quarters are not touched).\n\nType RESET to confirm.`);
+    if (ans && ans.trim().toUpperCase() === "RESET") {
+      setData((p) => { const n = JSON.parse(JSON.stringify(p)); const cq = n.quarters.find((x) => x.id === n.activeId); if (cq) cq.reps = seedRoster(); return n; });
+      setViewId(null); setTab("master");
+    }
+  };
 
   const exportCsv = () => {
-    let out = "Code,Rep,Q3 goal,Banked,Pipeline,Total forecast,Attainment,Gap\n";
+    let out = "Code,Rep,Goal,Banked,Pipeline,Total forecast,Attainment,Gap\n";
     team.rows.forEach(({ rep, t }) => { out += `${rep.code||""},"${rep.name}",${Math.round(t.quota)},${Math.round(t.banked)},${Math.round(t.pipeline)},${Math.round(t.total)},${(t.attainment*100).toFixed(1)}%,${Math.round(t.gap)}\n`; });
     out += `,TEAM,${Math.round(team.quota)},${Math.round(team.banked)},${Math.round(team.pipeline)},${Math.round(team.total)},${(team.attainment*100).toFixed(1)}%,${Math.round(team.gap)}\n`;
     const url = URL.createObjectURL(new Blob([out], { type: "text/csv" }));
@@ -135,11 +209,13 @@ export default function App() {
           <div className="brand-mark">PCC</div>
           <div><div className="brand-name">Field Team Forecast</div><div className="brand-sub">Proper Cheeky Closers</div></div>
         </div>
-        <QuarterControl q={q} onChange={(nq) => update((d) => (d.quarter = nq))} />
-        <div className="tb-right"><button className="ghost" onClick={exportCsv}>Export CSV</button><span className="save-pill">{status}</span></div>
+        <QuarterSwitcher quarters={data.quarters} activeId={data.activeId} viewId={vId} readOnly={readOnly}
+          onView={(id) => { setViewId(id); setTab("master"); }} onEdit={editQuarter} onClose={closeQuarter} />
+        <div className="tb-right"><button className="ghost" onClick={exportCsv}>Export CSV</button><span className="save-pill">{readOnly ? "read-only" : status}</span></div>
       </div>
 
-      {/* tabs */}
+      {readOnly && <div className="ro-banner">Viewing <b>{q.label}</b> — archived &amp; read-only. Switch to your current quarter in the dropdown to make changes.</div>}
+
       <div className="tabs">
         <button className={`tab master ${tab === "master" ? "on" : ""}`} onClick={() => setTab("master")}>
           <span className="tab-ico">▦</span> Master
@@ -154,22 +230,48 @@ export default function App() {
             </button>
           );
         })}
-        <button className="tab add" onClick={() => { const r = mkRep("", "New rep", 0); update((d) => d.reps.push(r)); setTab(r.id); }}>+</button>
+        {!readOnly && <button className="tab add" onClick={() => { const r = mkRep("", "New rep", 0); update((d, cq) => cq.reps.push(r)); setTab(r.id); }}>+</button>}
       </div>
 
       <div className="body">
         {tab === "master" || !activeRep ? (
-          <TeamView team={team} onPick={setTab} onReset={() => {
-            const ans = prompt("This wipes ALL data for the whole team back to the starting roster at $0 — it cannot be undone.\n\nType RESET to confirm.");
-            if (ans && ans.trim().toUpperCase() === "RESET") { setData(seedData()); setTab("master"); }
-          }} />
+          <TeamView team={team} onPick={setTab} readOnly={readOnly} onReset={resetCurrent} onCloseQuarter={closeQuarter} />
         ) : (
-          <RepView rep={activeRep} q={q}
-            up={(fn) => update((d) => fn(d.reps.find((r) => r.id === activeRep.id)))}
-            onDelRep={() => { if (confirm(`Remove ${activeRep.name}?`)) { update((d) => (d.reps = d.reps.filter((r) => r.id !== activeRep.id))); setTab("master"); } }} />
+          <RepView rep={activeRep} q={q} readOnly={readOnly}
+            up={(fn) => update((d, cq) => fn(cq.reps.find((r) => r.id === activeRep.id)))}
+            onDelRep={() => { if (window.confirm(`Remove ${activeRep.name}?`)) { update((d, cq) => (cq.reps = cq.reps.filter((r) => r.id !== activeRep.id))); setTab("master"); } }} />
         )}
       </div>
       <div className="foot-note">One shared team sheet — everyone with this link edits the same data. Reps work their own tab; you see all of it in Master.</div>
+    </div>
+  );
+}
+
+/* ---------- month cell (3-tier go-live bar) ---------- */
+function MonthCell({ label, prospect, signed, live, target }) {
+  const total = prospect + signed + live;
+  let used = 0;
+  const lw = Math.min((live / target) * 100, 100); used += lw;
+  const sw = Math.min((signed / target) * 100, Math.max(0, 100 - used)); used += sw;
+  const pw = Math.min((prospect / target) * 100, Math.max(0, 100 - used));
+  const liveHit = live >= target;
+  const totalHit = total >= target;
+  return (
+    <div className="month-cell">
+      <div className="month-top">
+        <span className="month-name">{label}</span>
+        <span className={`month-gpv mono ${liveHit ? "good" : "warn"}`}>{money(total)}</span>
+      </div>
+      <div className="month-bar">
+        <div className="month-fill live" style={{ left: 0, width: `${lw}%` }} />
+        <div className="month-fill signed" style={{ left: `${lw}%`, width: `${sw}%` }} />
+        <div className="month-fill prospect" style={{ left: `${lw + sw}%`, width: `${pw}%` }} />
+        <div className="month-goal" />
+      </div>
+      <div className="month-note">
+        <span className="good">{money(live)} live</span> · <span className="warn">{money(signed)} signed</span> · <span className="muted">{money(prospect)} prospect</span>
+        {" — "}{liveHit ? "target locked" : totalHit ? "on track" : `${money(Math.max(0, target - total))} short`}
+      </div>
     </div>
   );
 }
@@ -192,27 +294,47 @@ function Bar({ banked, pipeline, scenario = 0, quota, slim }) {
   );
 }
 
-/* ---------- quarter ---------- */
-function QuarterControl({ q, onChange }) {
+/* ---------- quarter switcher ---------- */
+function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, readOnly }) {
   const [open, setOpen] = useState(false);
-  const year = new Date(q.start + "T00:00:00").getFullYear() || new Date().getFullYear();
+  const active = quarters.find((x) => x.id === activeId) || quarters[0];
+  const viewed = quarters.find((x) => x.id === viewId) || active;
+  const year = new Date((viewed.start || "") + "T00:00:00").getFullYear() || new Date().getFullYear();
   const presets = [["Q1", `${year}-01-01`, `${year}-03-31`], ["Q2", `${year}-04-01`, `${year}-06-30`],
-    ["Q3", `${year}-07-01`, `${year}-09-30`], ["Q4", `${year}-10-01`, `${year}-12-31`],
-    ["H1", `${year}-01-01`, `${year}-06-30`], ["H2", `${year}-07-01`, `${year}-12-31`]];
+    ["Q3", `${year}-07-01`, `${year}-09-30`], ["Q4", `${year}-10-01`, `${year}-12-31`]];
+  const sorted = [...quarters].sort((a, b) => (a.start < b.start ? 1 : -1));
   return (
     <div className="qc">
       <button className="qc-btn" onClick={() => setOpen((o) => !o)}>
-        <span className="qc-dot" /> {q.label}<span className="qc-range">{q.start} → {q.end}</span><span className="qc-caret">▾</span>
+        <span className={`qc-dot ${readOnly ? "ro" : ""}`} /> {viewed.label}
+        <span className="qc-range">{viewed.start} → {viewed.end}</span>
+        {readOnly && <span className="qc-robadge">archived</span>}
+        <span className="qc-caret">▾</span>
       </button>
       {open && (
         <div className="qc-pop" onMouseLeave={() => setOpen(false)}>
-          <input className="qc-title" value={q.label} onChange={(e) => onChange({ ...q, label: e.target.value })} />
-          <div className="qc-dates">
-            <label>Start<input type="date" value={q.start} onChange={(e) => onChange({ ...q, start: e.target.value })} /></label>
-            <label>End<input type="date" value={q.end} onChange={(e) => onChange({ ...q, end: e.target.value })} /></label>
+          <div className="qc-section-label">Quarters</div>
+          <div className="qc-list">
+            {sorted.map((qq) => (
+              <button key={qq.id} className={`qc-qrow ${qq.id === viewed.id ? "on" : ""}`} onClick={() => { onView(qq.id); setOpen(false); }}>
+                <span>{qq.label}</span>
+                <span className={`qc-qrow-meta ${qq.id === activeId ? "current" : ""}`}>{qq.id === activeId ? "current" : "archived"}</span>
+              </button>
+            ))}
           </div>
-          <div className="qc-presets">{presets.map(([l, s, e]) => (
-            <button key={l} className={`chip ${q.start === s && q.end === e ? "on" : ""}`} onClick={() => onChange({ label: `${l} ${year}`, start: s, end: e })}>{l}</button>))}</div>
+          {!readOnly && (
+            <>
+              <div className="qc-section-label">Current quarter dates</div>
+              <input className="qc-title" value={active.label} onChange={(e) => onEdit({ label: e.target.value, start: active.start, end: active.end })} />
+              <div className="qc-dates">
+                <label>Start<input type="date" value={active.start} onChange={(e) => onEdit({ label: active.label, start: e.target.value, end: active.end })} /></label>
+                <label>End<input type="date" value={active.end} onChange={(e) => onEdit({ label: active.label, start: active.start, end: e.target.value })} /></label>
+              </div>
+              <div className="qc-presets">{presets.map(([l, s, e]) => (
+                <button key={l} className={`chip ${active.start === s && active.end === e ? "on" : ""}`} onClick={() => onEdit({ label: `${l} ${year}`, start: s, end: e })}>{l}</button>))}</div>
+              <button className="qc-close-btn" onClick={() => { setOpen(false); onClose(); }}>Close quarter &amp; start next →</button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -220,7 +342,7 @@ function QuarterControl({ q, onChange }) {
 }
 
 /* ---------- master ---------- */
-function TeamView({ team, onPick, onReset }) {
+function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
   return (
     <div className="view">
       <h1 className="view-title">Master view</h1>
@@ -252,18 +374,53 @@ function TeamView({ team, onPick, onReset }) {
           <div className="c-num mono">{pct(team.attainment, 0)}</div><div className="c-bar"><Bar banked={team.banked} pipeline={team.pipeline} quota={team.quota} /></div>
         </div>
       </div>
-      <div className="team-foot">
-        <button className="ghost sm danger" onClick={onReset}>Reset all data</button>
-        <span className="team-foot-note">Clears every rep's deals, loans &amp; carry-in back to the starting roster at $0. Use to start a fresh quarter.</span>
+      <div className="team-golive">
+        <div className="tg-head">
+          <div>
+            <h2>Team go-live — {money(4000000)}/rep per month</h2>
+            <p className="section-sub">Everyone's deals and prospects, by go-live month. Green = live (locked), solid amber = signed, hatched = prospect. Team line is {money(4000000)} × {team.repCount} reps = {money(team.teamTarget)}/month.</p>
+          </div>
+        </div>
+        <div className="month-strip team">
+          {team.monthData.map((md, i) => (
+            <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={team.teamTarget} />
+          ))}
+        </div>
+
+        {team.movers.length > 0 && (
+          <div className="tg-movers">
+            <div className="pg-sub-head">Biggest deals moving the needle</div>
+            {team.movers.map((mv, i) => (
+              <div className="mover-row" key={i}>
+                <span className="mover-name">{mv.name} <span className="mover-rep">{mv.rep.split(",")[0]}</span></span>
+                <span className={`mover-tag ${mv.kind}`}>{mv.kind === "signed" ? "Signed" : "Prospect"}</span>
+                <span className="mover-date">{mv.goLive || "no date"}</span>
+                <span className="mover-gpv mono">{money(mv.gpv)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
+      {!readOnly && (
+        <div className="team-foot">
+          <button className="ghost sm" onClick={onCloseQuarter}>Close quarter &amp; start next</button>
+          <button className="ghost sm danger" onClick={onReset}>Reset this quarter</button>
+          <span className="team-foot-note">“Close quarter” archives this one (still viewable) and opens the next fresh. “Reset” wipes only this quarter back to the roster at $0.</span>
+        </div>
+      )}
     </div>
   );
 }
 
 /* ---------- rep ---------- */
-function RepView({ rep, q, up, onDelRep }) {
+function RepView({ rep, q, up, onDelRep, readOnly }) {
   const [scenario, setScenario] = useState(null);
+  const [showActivated, setShowActivated] = useState(false);
   const t = repTotals(rep, q);
+  const pendingDeals = (rep.deals || []).filter((d) => !d.activated);
+  const activeDeals = (rep.deals || []).filter((d) => d.activated);
+  const activeGpv = activeDeals.reduce((s, d) => s + num(d.gpv), 0);
   const scnDeal = scenario ? calcDeal(scenario, q).contribution : 0;
   const scnLoan = scenario && scenario.hasLoan ? num(scenario.loanRevenue) : 0;
   const scnContribution = scnDeal + scnLoan;
@@ -272,6 +429,14 @@ function RepView({ rep, q, up, onDelRep }) {
 
   const addDeal = () => up((r) => r.deals.push(blankDeal(q)));
   const addLoan = () => up((r) => r.loans.push({ id: uid(), name: "", revenue: "" }));
+  const addProspect = () => up((r) => { r.prospects = r.prospects || []; r.prospects.push({ id: uid(), name: "", gpv: "", goLive: q.end }); });
+  const patchProspect = (id, p) => up((r) => Object.assign((r.prospects || []).find((x) => x.id === id), p));
+  const delProspect = (id) => up((r) => { r.prospects = (r.prospects || []).filter((x) => x.id !== id); });
+  const promoteProspect = (id) => up((r) => {
+    const p = (r.prospects || []).find((x) => x.id === id); if (!p) return;
+    r.deals.push({ ...blankDeal(q), name: p.name, gpv: p.gpv, goLive: p.goLive || q.end });
+    r.prospects = r.prospects.filter((x) => x.id !== id);
+  });
   const signScenario = () => {
     up((r) => {
       const { hasLoan, loanRevenue, ...deal } = scenario;
@@ -292,9 +457,11 @@ function RepView({ rep, q, up, onDelRep }) {
             <label>Q3 goal <span className="dollar"><i>$</i><input className="goal-in" inputMode="decimal" value={rep.quota} onChange={(e) => up((r) => (r.quota = e.target.value))} /></span></label>
           </div>
         </div>
-        <button className={`model-cta ${scenario ? "active" : ""}`} onClick={() => setScenario(scenario ? null : { ...blankDeal(q), name: "Prospect", confidence: 100, hasLoan: false, loanRevenue: "" })}>
-          {scenario ? "Close scratchpad" : "＋ Model a deal"}
-        </button>
+        {!readOnly && (
+          <button className={`model-cta ${scenario ? "active" : ""}`} onClick={() => setScenario(scenario ? null : { ...blankDeal(q), name: "Prospect", confidence: 100, hasLoan: false, loanRevenue: "" })}>
+            {scenario ? "Close scratchpad" : "＋ Model a deal"}
+          </button>
+        )}
       </div>
 
       <div className="kpi-row five">
@@ -309,7 +476,7 @@ function RepView({ rep, q, up, onDelRep }) {
         <Bar banked={t.banked} pipeline={t.pipeline} scenario={scnContribution} quota={t.quota} />
         <div className="hero-legend">
           <span><i className="sw good" /> Banked {money(t.banked)}</span>
-          <span><i className="sw warn" /> Pipeline {money(t.pipeline)}{t.loans > 0 ? ` \u00b7 incl. ${money(t.loans)} loans` : ""}</span>
+          <span><i className="sw warn" /> Pipeline {money(t.pipeline)}{t.loans > 0 ? ` · incl. ${money(t.loans)} loans` : ""}</span>
           {scenario && <span><i className="sw scn" /> If signed {money(scnContribution)}</span>}
           <span className="goal-lbl">Goal {money(t.quota)}</span>
         </div>
@@ -375,16 +542,31 @@ function RepView({ rep, q, up, onDelRep }) {
         </div>
       </div>
 
-      <Section title="Signed deals" sub="New wins. Weighted by confidence while pending; flip to Live when it goes live and it banks automatically — no re-entry." onAdd={addDeal} addLabel="+ Add deal">
-        {rep.deals.length === 0 && <Empty>No deals yet. Add what you've signed to see where you land.</Empty>}
-        {rep.deals.map((d) => (
+      <Section title="Signed deals — pending" sub="Enter each deal once with its GPV and go-live date — it flows automatically into your GPV totals and the monthly $4M bars below. Tick it live when it activates and it drops off here into the rolling number up top." onAdd={readOnly ? null : addDeal} addLabel="+ Add deal">
+        {pendingDeals.length === 0 && <Empty>No pending signed deals. Add what you've signed — it auto-fills your path-to-goal below.</Empty>}
+        {pendingDeals.map((d) => (
           <DealCard key={d.id} d={d} q={q}
             onPatch={(p) => up((r) => Object.assign(r.deals.find((x) => x.id === d.id), p))}
             onDel={() => up((r) => (r.deals = r.deals.filter((x) => x.id !== d.id)))} />
         ))}
+        {activeDeals.length > 0 && (
+          <div className="activated-group">
+            <button className="activated-toggle" onClick={() => setShowActivated((s) => !s)}>
+              {showActivated ? "▾" : "▸"} Activated this quarter ({activeDeals.length}) · {money(activeGpv)} GPV live
+            </button>
+            {showActivated && activeDeals.map((d) => (
+              <div className="activated-row" key={d.id}>
+                <span className="activated-name">{d.name || "Untitled deal"}</span>
+                <span className="activated-meta">{d.goLive || "no date"}</span>
+                <span className="activated-gpv mono">{money(num(d.gpv))} GPV</span>
+                {!readOnly && <button className="ghost sm" onClick={() => up((r) => { const x = r.deals.find((y) => y.id === d.id); if (x) x.activated = false; })}>Undo</button>}
+              </div>
+            ))}
+          </div>
+        )}
       </Section>
 
-      <Section title="Loans" sub="Enter the loan revenue amount — that's 75% of the loan fee. Counts toward pipeline." onAdd={addLoan} addLabel="+ Add loan">
+      <Section title="Loans" sub="Enter the loan revenue amount — that's 75% of the loan fee. Counts toward pipeline." onAdd={readOnly ? null : addLoan} addLabel="+ Add loan">
         {rep.loans.length === 0 && <Empty>No loans logged.</Empty>}
         {rep.loans.map((l) => (
           <div className="carry-row" key={l.id}>
@@ -396,9 +578,10 @@ function RepView({ rep, q, up, onDelRep }) {
         ))}
       </Section>
 
-      <PathToGoal t={t} q={q} />
+      <PathToGoal t={t} q={q} deals={rep.deals}
+        prospects={rep.prospects || []} onAddProspect={readOnly ? null : addProspect} onPatchProspect={patchProspect} onDelProspect={delProspect} onPromoteProspect={readOnly ? null : promoteProspect} />
 
-      <div className="rep-foot"><button className="ghost sm danger" onClick={onDelRep}>Remove rep</button></div>
+      {!readOnly && <div className="rep-foot"><button className="ghost sm danger" onClick={onDelRep}>Remove rep</button></div>}
     </div>
   );
 }
@@ -408,102 +591,178 @@ const CATCHUP_RATE = 0.022; // assumed average take rate for the path-to-goal ma
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const fmtDate = (d) => `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`;
 const isoDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const monthKey = (isoStr) => { if (!isoStr) return null; const d = new Date(isoStr + "T00:00:00"); return isNaN(d) ? null : d.getFullYear() * 12 + d.getMonth(); };
+function quarterMonths(qStart, qEnd) {
+  const s = new Date(qStart + "T00:00:00"), e = new Date(qEnd + "T00:00:00");
+  const out = []; let d = new Date(s.getFullYear(), s.getMonth(), 1);
+  while (d <= e) { out.push(new Date(d)); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); }
+  return out;
+}
 
-function PathToGoal({ t, q }) {
+function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, onDelProspect, onPromoteProspect }) {
   if (t.quota <= 0) return null;
+  const MONTH_TARGET = 4000000;
+  const list = prospects || [];
+  const allDeals = deals || [];
+  const behind = t.gap > 0;
+  const MONTH_TARGET_TXT = MONTH_TARGET;
 
-  if (t.gap <= 0) {
-    return (
-      <div className="section pathgoal ongoal">
-        <h2>Path to goal</h2>
-        <div className="pg-clear">On pace — forecast is {pct(t.attainment)} of goal, {money(-t.gap)} over. Keep activating early to bank every day of processing.</div>
-      </div>
-    );
-  }
+  // total GPV in play across all this rep's deals (signed pipeline + activated), always shown
+  const signedRolling = allDeals.reduce((s, d) => s + num(d.gpv), 0);
+  // date-aware "GPV still to close, if live now" (net additional beyond what's signed)
+  const qsD = new Date(q.start + "T00:00:00");
+  const nowD = new Date();
+  const nowPt = nowD < qsD ? qsD : nowD;
+  const monthsNow = monthsRemaining(isoDate(nowPt), q.start, q.end);
+  const gpvNow = behind && monthsNow > 0 ? (t.gap * 12) / (CATCHUP_RATE * monthsNow) : 0;
 
-  const qStart = new Date(q.start + "T00:00:00");
-  const qEnd = new Date(q.end + "T00:00:00");
-  const today = new Date();
-  const start = today < qStart ? qStart : today;
+  // date-aware: revenue a GPV amount earns this quarter, given its go-live date
+  const revFromGpv = (gpv, goLive) => num(gpv) * CATCHUP_RATE / 12 * monthsRemaining(goLive, q.start, q.end);
 
-  const dates = [];
-  if (start < qEnd) {
-    dates.push(new Date(start));
-    let d = new Date(start.getFullYear(), start.getMonth() + 1, 1);
-    while (d < qEnd) { dates.push(new Date(d)); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); }
-  }
+  const prospectRev = list.reduce((s, p) => s + revFromGpv(p.gpv, p.goLive), 0);
+  const gapRemaining = t.gap - prospectRev;
 
-  const rows = dates.map((dt, i) => {
-    const m = monthsRemaining(isoDate(dt), q.start, q.end);
-    const gpv = m > 0.3 ? (t.gap * 12) / (CATCHUP_RATE * m) : null;
-    return { dt, m, gpv, asap: i === 0 };
+  // monthly go-live cadence: prospect / signed / live, by go-live month
+  const months = quarterMonths(q.start, q.end);
+  const monthData = months.map((m) => {
+    const key = m.getFullYear() * 12 + m.getMonth();
+    let prospect = 0, signed = 0, live = 0;
+    allDeals.forEach((d) => { if (monthKey(d.goLive) === key) { if (d.activated) live += num(d.gpv); else signed += num(d.gpv); } });
+    list.forEach((p) => { if (monthKey(p.goLive) === key) prospect += num(p.gpv); });
+    return { m, prospect, signed, live };
   });
-  const headline = rows.length ? rows[0].gpv : null;
+
+  // date-aware GPV needed to close the gap (restored): if live now vs by each month start
+  const gpvChecks = [];
+  if (behind) {
+    const qs = new Date(q.start + "T00:00:00"), qe = new Date(q.end + "T00:00:00");
+    const now = new Date();
+    const startPt = now < qs ? qs : now;
+    const pts = [new Date(startPt)];
+    let d2 = new Date(startPt.getFullYear(), startPt.getMonth() + 1, 1);
+    while (d2 < qe) { pts.push(new Date(d2)); d2 = new Date(d2.getFullYear(), d2.getMonth() + 1, 1); }
+    pts.forEach((dt, i) => {
+      const mr = monthsRemaining(isoDate(dt), q.start, q.end);
+      gpvChecks.push({ label: i === 0 ? "live now" : `by ${fmtDate(dt)}`, gpv: mr > 0.3 ? (t.gap * 12) / (CATCHUP_RATE * mr) : null });
+    });
+  }
 
   return (
-    <div className="section pathgoal">
+    <div className={`section pathgoal ${behind ? "" : "ongoal"}`}>
       <h2>Path to goal</h2>
-      <p className="section-sub">
-        You're {money(t.gap)} short of your {money(t.quota)} goal ({pct(t.attainment, 0)} there). Revenue builds per day once a deal goes live, so the sooner you activate, the less new business it takes. Figures assume a {pct(CATCHUP_RATE, 1)} average take rate.
-      </p>
+      {behind ? (
+        <p className="section-sub">
+          You're {money(t.gap)} short of your {money(t.quota)} goal ({pct(t.attainment, 0)} there). The later a deal goes live, the fewer processing days it gets this quarter — so a later go-live closes less of your gap. Figures use a {pct(CATCHUP_RATE, 1)} take rate.
+        </p>
+      ) : (
+        <div className="pg-clear">On pace — forecast is {pct(t.attainment)} of goal, {money(-t.gap)} over. Keep {money(MONTH_TARGET)} of GPV going live each month.</div>
+      )}
 
-      {headline != null && (
-        <div className="pg-headline">
-          <span className="pg-headline-label">Activate now and you're on goal with about</span>
-          <span className="pg-headline-val mono">{money(headline)}<span className="pg-unit">GPV</span></span>
+      <div className="pg-gpv">
+        <div className="pg-gpv-item">
+          <span className="mini-label">GPV signed &amp; rolling</span>
+          <span className="pg-gpv-val mono">{money(signedRolling)}</span>
+          <span className="pg-gpv-note">across all your deals</span>
+        </div>
+        <div className={`pg-gpv-item ${behind ? "warn" : "good"}`}>
+          <span className="mini-label">{behind ? "GPV still to close" : "GPV to close"}</span>
+          <span className="pg-gpv-val mono">{money(gpvNow)}</span>
+          <span className="pg-gpv-note">{behind ? "extra, if live now — rises the later you activate" : "goal covered — keep the pipeline full"}</span>
+        </div>
+        <div className="pg-gpv-item">
+          <span className="mini-label">Monthly target</span>
+          <span className="pg-gpv-val mono">{money(MONTH_TARGET)}</span>
+          <span className="pg-gpv-note">GPV to go live each month</span>
+        </div>
+      </div>
+
+      {behind && gpvChecks.length > 0 && (
+        <div className="pg-gpvneed">
+          <span className="pg-gpvneed-label">GPV to move to close your {money(t.gap)} gap:</span>
+          <div className="pg-gpvneed-row">
+            {gpvChecks.map((g, i) => (
+              <div className={`pg-gpvneed-item ${i === 0 ? "now" : ""}`} key={i}>
+                <span className="pg-gpvneed-when">{g.label}</span>
+                <span className="pg-gpvneed-val mono">{g.gpv != null ? money(g.gpv) : "too late"}</span>
+              </div>
+            ))}
+          </div>
+          <span className="pg-gpvneed-note">The later it activates, the more GPV it takes — same gap, fewer processing days.</span>
         </div>
       )}
 
-      <div className="pg-rows">
-        {rows.map((r, i) => (
-          <div className={`pg-row ${r.asap ? "asap" : ""} ${r.gpv == null ? "late" : ""}`} key={i}>
-            <div className="pg-when">
-              <span className="pg-when-lead">{r.asap ? "Get live now" : `Get live by ${fmtDate(r.dt)}`}</span>
-              {r.m > 0 && <span className="pg-when-sub">{r.m.toFixed(1)} months of processing left this quarter</span>}
-            </div>
-            <div className="pg-need mono">
-              {r.gpv != null ? <>{money(r.gpv)} <span className="pg-unit">GPV</span></> : <span className="pg-toolate">too late to close the gap this quarter</span>}
-            </div>
-          </div>
+      <div className="pg-sub-head">Go-live plan — {money(MONTH_TARGET)}/month target &nbsp;<span className="pg-legend-inline"><i className="sw live" /> live &nbsp;<i className="sw signed" /> signed &nbsp;<i className="sw prospect" /> prospect</span></div>
+      <div className="month-strip">
+        {monthData.map((md, i) => (
+          <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={MONTH_TARGET} />
         ))}
+      </div>
+      <p className="pg-fineprint">Green = live (locked in) · solid amber = signed (won, coming) · hatched = prospect (chasing). Bucketed by go-live date.</p>
+
+      <div className="pg-prospects">
+        <div className="pg-prospects-head">
+          <div className="pg-sub-head">Which deals will get you there? {behind ? `Add prospects to close the ${money(t.gap)} gap — the “closes” figure reflects each deal's go-live date.` : "Track the prospects you're chasing."}</div>
+          {onAddProspect && <button className="ghost sm" onClick={onAddProspect}>+ Add prospect</button>}
+        </div>
+        {list.length === 0 && <div className="pg-prospects-empty">No prospects yet. Add GPV + an expected go-live date — a later date closes less of your gap.</div>}
+        {list.map((p) => {
+          const rev = revFromGpv(p.gpv, p.goLive);
+          return (
+            <div className="prospect-row" key={p.id}>
+              <input className="line-name" placeholder="Prospect / opp name" value={p.name} onChange={(e) => onPatchProspect(p.id, { name: e.target.value })} />
+              <label className="inline-field">GPV<span className="dollar"><i>$</i><input inputMode="decimal" value={p.gpv} onChange={(e) => onPatchProspect(p.id, { gpv: e.target.value })} /></span></label>
+              <label className="inline-field">Est. go-live<input type="date" className="prospect-date" value={p.goLive || ""} onChange={(e) => onPatchProspect(p.id, { goLive: e.target.value })} /></label>
+              <div className="prospect-rev"><span className="mini-label">closes</span><span className="mono good">{money(rev)}</span></div>
+              {onPromoteProspect && <button className="promote-btn" onClick={() => onPromoteProspect(p.id)} title="Move to signed deals">→ Sign</button>}
+              <button className="x" onClick={() => onDelProspect(p.id)} aria-label="Delete prospect">×</button>
+            </div>
+          );
+        })}
+        {behind && list.length > 0 && (
+          <div className="pg-prospect-totals">
+            <span>Prospects close <b className="mono">{money(prospectRev)}</b> of your {money(t.gap)} gap</span>
+            <span className={gapRemaining <= 0 ? "good strong" : "warn strong"}>{gapRemaining <= 0 ? `Gap covered — ${money(-gapRemaining)} to spare` : `${money(gapRemaining)} still to close`}</span>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 function DealCard({ d, q, onPatch, onDel }) {
-  const c = calcDeal(d, q), isFlat = d.model !== "costplus", live = d.stage === "live";
+  const c = calcDeal(d, q), isFlat = d.model !== "costplus", activated = !!d.activated;
   return (
-    <div className={`deal ${live ? "islive" : "issigned"}`}>
+    <div className={`deal ${activated ? "islive" : "issigned"}`}>
       <div className="deal-header">
         <div className="deal-header-left">
-          <span className={`status-pill ${live ? "live" : "signed"}`}>{live ? "Live" : "Signed"}</span>
+          <span className={`status-pill ${activated ? "live" : "signed"}`}>{activated ? "Activated" : "Signed"}</span>
           <input className="deal-name-in" placeholder="Untitled deal" value={d.name} onChange={(e) => onPatch({ name: e.target.value })} />
         </div>
         <div className="deal-header-right">
           <div className="deal-forecast">
-            <span className="mini-label">{live ? "Banked" : "Forecast"}</span>
-            <span className={`deal-forecast-val mono ${live ? "good" : "warn"}`}>{money(c.contribution)}</span>
+            <span className="mini-label">{activated ? "GPV live" : "Forecast"}</span>
+            <span className={`deal-forecast-val mono ${activated ? "good" : "warn"}`}>{activated ? money(num(d.gpv)) : money(c.contribution)}</span>
           </div>
           <button className="x" onClick={onDel} aria-label="Delete deal">×</button>
         </div>
       </div>
       <div className="deal-controls">
-        <div className="stage-toggle">
-          <button className={!live ? "on" : ""} onClick={() => onPatch({ stage: "signed" })}>Signed</button>
-          <button className={live ? "on live" : ""} onClick={() => onPatch({ stage: "live" })}>Live</button>
-        </div>
+        <button className={`nowlive-btn ${activated ? "on" : ""}`} onClick={() => {
+          if (activated) { if (window.confirm("Move this deal back to pipeline (not yet live)?")) onPatch({ activated: false }); }
+          else { if (window.confirm(`Mark "${d.name || "this deal"}" activated? Its GPV moves to your live/actual total for its go-live month, and its revenue now comes from your closed-accounts total (not counted again here).`)) onPatch({ activated: true }); }
+        }}>
+          <span className={`nowlive-box ${activated ? "checked" : ""}`}>{activated ? "✓" : ""}</span> {activated ? "Activated — click to undo" : "Tick once activated"}
+        </button>
         <div className="model-toggle">
           <button className={isFlat ? "on" : ""} onClick={() => onPatch({ model: "flat" })}>Flat/blended</button>
           <button className={!isFlat ? "on" : ""} onClick={() => onPatch({ model: "costplus" })}>Cost-plus</button>
         </div>
       </div>
-      <DealFields d={d} isFlat={isFlat} live={live} onPatch={onPatch} />
+      <DealFields d={d} isFlat={isFlat} live={false} onPatch={onPatch} />
       <div className="deal-calc">
         <Calc label="Eff. rate" v={pct(c.effRate, 3)} /><Calc label="Monthly" v={money(c.monthly)} />
-        <Calc label="Months left" v={c.mr.toFixed(2)} /><Calc label="Quota credit" v={money(c.quotaCredit)} />
+        <Calc label="Months left" v={c.mr.toFixed(2)} /><Calc label={activated ? "Revenue" : "Quota credit"} v={activated ? "via closed-accts" : money(c.quotaCredit)} />
       </div>
-      {live && <div className="live-note">Live — counts at 100%, banked toward goal.</div>}
     </div>
   );
 }
@@ -547,7 +806,7 @@ function ScenarioFields({ d, q, onPatch }) {
 /* ---------- small ---------- */
 function Section({ title, sub, onAdd, addLabel, children }) {
   return (<div className="section"><div className="section-head"><div><h2>{title}</h2><p className="section-sub">{sub}</p></div>
-    <button className="primary" onClick={onAdd}>{addLabel}</button></div>{children}</div>);
+    {onAdd && <button className="primary" onClick={onAdd}>{addLabel}</button>}</div>{children}</div>);
 }
 const Empty = ({ children }) => <div className="empty">{children}</div>;
 function Field({ label, v, on, pre, suf, hint, disabled }) {
@@ -784,5 +1043,97 @@ function Style() {
   .kpi-row.five{grid-template-columns:repeat(5,1fr)}
   @media(max-width:1000px){ .kpi-row.five{grid-template-columns:repeat(2,1fr)} }
   .contrib.warn{color:var(--warn)}
+
+  .nowlive-btn{display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 13px;font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer;font-family:'Inter'}
+  .nowlive-btn:hover{border-color:var(--good);color:var(--good)}
+  .nowlive-btn.on{border-color:#C7E4D6;background:var(--good-soft);color:var(--good)}
+  .nowlive-box{width:17px;height:17px;border-radius:5px;border:1.5px solid var(--muted);display:grid;place-items:center;font-size:11px;line-height:1}
+  .nowlive-btn:hover .nowlive-box{border-color:var(--good)}
+  .nowlive-box.checked{background:var(--good);border-color:var(--good);color:#fff}
+
+  .pg-gpv{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:6px 0 16px}
+  .pg-gpv-item{display:flex;flex-direction:column;gap:3px;background:#fff;border:1px solid var(--line);border-radius:11px;padding:14px 16px}
+  .pg-gpv-item.good{background:var(--good-soft);border-color:#C7E4D6}
+  .pg-gpv-item.warn{background:var(--warn-soft);border-color:#EEDBBB}
+  .pg-gpv-val{font-size:22px;font-weight:600}
+  .pg-gpv-item.good .pg-gpv-val{color:var(--good)} .pg-gpv-item.warn .pg-gpv-val{color:var(--warn)}
+  .pg-gpv-note{font-size:11px;color:var(--muted)}
+  .pg-sub-head{font-size:12.5px;font-weight:600;color:var(--ink);margin:6px 0 10px}
+  @media(max-width:1000px){ .pg-gpv{grid-template-columns:1fr} }
+
+  .pg-prospects{margin:4px 0 14px;padding:14px 16px;background:#fff;border:1px solid var(--line);border-radius:12px}
+  .pg-prospects-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:10px}
+  .pg-prospects-empty{font-size:12.5px;color:var(--muted);padding:6px 0}
+  .prospect-row{display:grid;grid-template-columns:1fr auto auto auto auto auto;gap:12px;align-items:end;padding:10px 0;border-top:1px solid var(--line2)}
+  .prospect-rev{display:flex;flex-direction:column;gap:2px;text-align:right;min-width:90px}
+  .prospect-rev .mono{font-size:14px;font-weight:600}
+  .prospect-date{border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-family:'JetBrains Mono';font-size:12px;background:#FBFCFD;color:var(--ink)}
+  .pg-prospect-totals{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:12px;padding-top:12px;border-top:1.5px solid var(--line);font-size:13.5px;flex-wrap:wrap}
+  .pg-prospect-totals .strong{font-weight:600}
+
+  .month-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:6px 0 4px}
+  .month-cell{background:#fff;border:1px solid var(--line);border-radius:11px;padding:13px 14px}
+  .month-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .month-name{font-size:12px;font-weight:600;font-family:'Space Grotesk';color:var(--ink)}
+  .month-gpv{font-size:15px;font-weight:600}
+  .month-bar{position:relative;height:12px;background:#EDF0F3;border-radius:5px;overflow:hidden}
+  .month-fill{position:absolute;top:0;bottom:0;left:0;background:var(--warn);transition:width .25s}
+  .month-fill.live{background:var(--good)}
+  .month-fill.signed{background:var(--warn)}
+  .month-fill.prospect{background:repeating-linear-gradient(45deg,#E9B865,#E9B865 4px,#F6DDAE 4px,#F6DDAE 8px)}
+  .month-goal{position:absolute;top:-2px;bottom:-2px;left:calc(100% - 2px);width:2px;background:var(--ink)}
+  .month-note{font-size:11px;color:var(--muted);margin-top:6px}
+  .pg-fineprint{font-size:11px;color:var(--muted);margin:8px 0 14px}
+  @media(max-width:1000px){ .month-strip{grid-template-columns:1fr} }
+
+  .pg-legend-inline{font-size:11px;font-weight:500;color:var(--muted)}
+  .pg-legend-inline .sw{width:10px;height:10px;border-radius:3px;display:inline-block;vertical-align:-1px;margin-right:3px}
+  .pg-gpvneed{background:#fff;border:1px solid var(--line);border-radius:11px;padding:13px 15px;margin:2px 0 16px}
+  .pg-gpvneed-label{font-size:12px;font-weight:600;color:var(--ink)}
+  .pg-gpvneed-row{display:flex;flex-wrap:wrap;gap:10px;margin:9px 0}
+  .pg-gpvneed-item{display:flex;flex-direction:column;gap:2px;background:#F7F9FC;border:1px solid var(--line);border-radius:8px;padding:7px 12px;min-width:96px}
+  .pg-gpvneed-item.now{border-color:var(--accent);background:var(--accent-soft)}
+  .pg-gpvneed-when{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  .pg-gpvneed-val{font-size:15px;font-weight:600}
+  .pg-gpvneed-note{font-size:11px;color:var(--muted)}
+
+  .team-golive{margin-top:26px;padding-top:22px;border-top:1px solid var(--line)}
+  .tg-head{margin-bottom:14px}
+  .month-strip.team{margin-bottom:18px}
+  .tg-movers{background:#F7F9FC;border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .mover-row{display:grid;grid-template-columns:1fr auto auto auto;gap:14px;align-items:center;padding:9px 0;border-top:1px solid var(--line2)}
+  .mover-row:first-of-type{border-top:none}
+  .mover-name{font-weight:600;font-family:'Space Grotesk';font-size:14px}
+  .mover-rep{font-weight:500;font-size:12px;color:var(--muted);font-family:'Inter'}
+  .mover-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:20px}
+  .mover-tag.signed{background:var(--warn-soft);color:var(--warn)}
+  .mover-tag.prospect{background:var(--accent-soft);color:var(--accent)}
+  .mover-date{font-family:'JetBrains Mono';font-size:12px;color:var(--muted)}
+  .mover-gpv{font-size:15px;font-weight:600;text-align:right;min-width:90px}
+
+  .ro-banner{background:#FBF1DF;border-bottom:1px solid #EEDBBB;color:#7A5410;font-size:13px;padding:10px 26px;text-align:center}
+  .qc-dot.ro{background:var(--warn)}
+  .qc-robadge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;background:var(--warn-soft);color:var(--warn);border-radius:20px;padding:1px 7px}
+  .qc-section-label{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:2px 0 7px}
+  .qc-list{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+  .qc-qrow{display:flex;justify-content:space-between;align-items:center;gap:10px;background:#F7F8FA;border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-size:13px;font-weight:600;font-family:'Space Grotesk';color:var(--ink);cursor:pointer}
+  .qc-qrow.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .qc-qrow-meta{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-family:'Inter'}
+  .qc-qrow-meta.current{color:var(--good)}
+  .qc-close-btn{width:100%;margin-top:12px;background:var(--ink);color:#fff;border:none;border-radius:9px;padding:10px;font-weight:600;font-size:12.5px;cursor:pointer;font-family:'Inter'}
+  .qc-close-btn:hover{background:#000}
+
+  .activated-group{margin-top:6px;border-top:1px dashed var(--line);padding-top:10px}
+  .activated-toggle{background:none;border:none;color:var(--good);font-weight:600;font-size:12.5px;cursor:pointer;font-family:'Inter';padding:4px 0}
+  .activated-row{display:grid;grid-template-columns:1fr auto auto auto;gap:12px;align-items:center;padding:8px 0;border-top:1px solid var(--line2);font-size:13px}
+  .activated-name{font-weight:600;font-family:'Space Grotesk'}
+  .activated-meta{font-family:'JetBrains Mono';font-size:12px;color:var(--muted)}
+  .activated-gpv{font-weight:600;color:var(--good)}
+  .promote-btn{background:var(--good-soft);border:1px solid #C7E4D6;color:var(--good);border-radius:8px;padding:7px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter';white-space:nowrap}
+  .promote-btn:hover{background:var(--good);color:#fff}
+
+  .sw.live{background:var(--good)} .sw.signed{background:var(--warn)}
+  .sw.prospect{background:repeating-linear-gradient(45deg,#E9B865,#E9B865 3px,#F6DDAE 3px,#F6DDAE 6px)}
+  .month-note .muted{color:var(--muted)}
   `}</style>);
 }
