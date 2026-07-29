@@ -146,14 +146,15 @@ export default function App() {
     const MONTH_TARGET = 4000000;
     const teamTarget = MONTH_TARGET * reps.length;
     const months = quarterMonths(q.start, q.end);
+    const todayIsoM = isoDate(new Date());
     const monthData = months.map((m) => {
       const key = m.getFullYear() * 12 + m.getMonth();
-      let prospect = 0, signed = 0, live = 0;
+      let prospect = 0, signed = 0, live = 0, overdue = 0;
       reps.forEach((r) => {
-        (r.deals || []).forEach((d) => { if (monthKey(d.goLive) === key) { if (d.activated) live += num(d.gpv); else signed += num(d.gpv); } });
-        (r.prospects || []).forEach((p) => { if (monthKey(p.goLive) === key) prospect += num(p.gpv); });
+        (r.deals || []).forEach((d) => { if (monthKey(d.goLive) === key) { if (d.activated) live += num(d.gpv); else if (d.goLive < todayIsoM) overdue += num(d.gpv); else signed += num(d.gpv); } });
+        (r.prospects || []).forEach((p) => { if (monthKey(p.goLive) === key) { if (p.goLive && p.goLive < todayIsoM) overdue += num(p.gpv); else prospect += num(p.gpv); } });
       });
-      return { m, prospect, signed, live };
+      return { m, prospect, signed, live, overdue };
     });
     // unified upcoming list: every not-yet-live deal (signed) + prospect, with overdue flag
     const todayIso = isoDate(new Date());
@@ -326,10 +327,11 @@ function ActivationWindow({ upcoming, todayIso }) {
 }
 
 /* ---------- month cell (3-tier go-live bar) ---------- */
-function MonthCell({ label, prospect, signed, live, target, overdue }) {
-  const total = prospect + signed + live;
+function MonthCell({ label, prospect, signed, live, target, overdue = 0 }) {
+  const total = prospect + signed + live + overdue;
   let used = 0;
   const lw = Math.min((live / target) * 100, 100); used += lw;
+  const ow = Math.min((overdue / target) * 100, Math.max(0, 100 - used)); used += ow;
   const sw = Math.min((signed / target) * 100, Math.max(0, 100 - used)); used += sw;
   const pw = Math.min((prospect / target) * 100, Math.max(0, 100 - used));
   const liveHit = live >= target;
@@ -340,15 +342,17 @@ function MonthCell({ label, prospect, signed, live, target, overdue }) {
         <span className="month-name">{label}</span>
         <span className={`month-gpv mono ${liveHit ? "good" : "warn"}`}>{money(total)}</span>
       </div>
-      <div className={`month-bar ${overdue ? "has-overdue" : ""}`}>
+      <div className="month-bar">
         <div className="month-fill live" style={{ left: 0, width: `${lw}%` }} />
-        <div className="month-fill signed" style={{ left: `${lw}%`, width: `${sw}%` }} />
-        <div className="month-fill prospect" style={{ left: `${lw + sw}%`, width: `${pw}%` }} />
+        <div className="month-fill overdue" style={{ left: `${lw}%`, width: `${ow}%` }} />
+        <div className="month-fill signed" style={{ left: `${lw + ow}%`, width: `${sw}%` }} />
+        <div className="month-fill prospect" style={{ left: `${lw + ow + sw}%`, width: `${pw}%` }} />
         <div className="month-goal" />
-        {overdue && <span className="month-overdue-flag" title="A deal here has a past go-live date">!</span>}
+        {overdue > 0 && <span className="month-overdue-flag" title="A deal here has a past go-live date">!</span>}
       </div>
       <div className="month-note">
         <span className="good">{money(live)} live</span> · <span className="warn">{money(signed)} signed</span> · <span className="muted">{money(prospect)} prospect</span>
+        {overdue > 0 && <> · <span className="danger">{money(overdue)} at risk</span></>}
         {" — "}{liveHit ? "target locked" : totalHit ? "on track" : `${money(Math.max(0, target - total))} short`}
       </div>
     </div>
@@ -465,7 +469,7 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
         )}
         <div className="month-strip team">
           {team.monthData.map((md, i) => (
-            <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={team.teamTarget} overdue={!!team.overdueMonths[md.m.getFullYear() * 12 + md.m.getMonth()]} />
+            <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={team.teamTarget} overdue={md.overdue} />
           ))}
         </div>
 
@@ -708,12 +712,13 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
 
   // monthly go-live cadence: prospect / signed / live, by go-live month
   const months = quarterMonths(q.start, q.end);
+  const todayIso = isoDate(new Date());
   const monthData = months.map((m) => {
     const key = m.getFullYear() * 12 + m.getMonth();
-    let prospect = 0, signed = 0, live = 0;
-    allDeals.forEach((d) => { if (monthKey(d.goLive) === key) { if (d.activated) live += num(d.gpv); else signed += num(d.gpv); } });
-    list.forEach((p) => { if (monthKey(p.goLive) === key) prospect += num(p.gpv); });
-    return { m, prospect, signed, live };
+    let prospect = 0, signed = 0, live = 0, overdue = 0;
+    allDeals.forEach((d) => { if (monthKey(d.goLive) === key) { if (d.activated) live += num(d.gpv); else if (d.goLive < todayIso) overdue += num(d.gpv); else signed += num(d.gpv); } });
+    list.forEach((p) => { if (monthKey(p.goLive) === key) { if (p.goLive && p.goLive < todayIso) overdue += num(p.gpv); else prospect += num(p.gpv); } });
+    return { m, prospect, signed, live, overdue };
   });
 
   // date-aware GPV needed to close the gap (restored): if live now vs by each month start
@@ -778,7 +783,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
       <div className="pg-sub-head">Go-live plan — {money(MONTH_TARGET)}/month target &nbsp;<span className="pg-legend-inline"><i className="sw live" /> live &nbsp;<i className="sw signed" /> signed &nbsp;<i className="sw prospect" /> prospect</span></div>
       <div className="month-strip">
         {monthData.map((md, i) => (
-          <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={MONTH_TARGET} />
+          <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={MONTH_TARGET} overdue={md.overdue} />
         ))}
       </div>
       <p className="pg-fineprint">Green = live (locked in) · solid amber = signed (won, coming) · hatched = prospect (chasing). Bucketed by go-live date.</p>
@@ -816,11 +821,13 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
 
 function DealCard({ d, q, onPatch, onDel }) {
   const c = calcDeal(d, q), isFlat = d.model !== "costplus", activated = !!d.activated;
+  const overdue = !activated && !!d.goLive && d.goLive < isoDate(new Date());
   return (
-    <div className={`deal ${activated ? "islive" : "issigned"}`}>
+    <div className={`deal ${activated ? "islive" : overdue ? "isoverdue" : "issigned"}`}>
+      {overdue && <div className="deal-overdue">⚠ Go-live date ({d.goLive}) is in the past — update it below, or tick the deal live if it's activated.</div>}
       <div className="deal-header">
         <div className="deal-header-left">
-          <span className={`status-pill ${activated ? "live" : "signed"}`}>{activated ? "Activated" : "Signed"}</span>
+          <span className={`status-pill ${activated ? "live" : overdue ? "overdue" : "signed"}`}>{activated ? "Activated" : overdue ? "Overdue" : "Signed"}</span>
           <input className="deal-name-in" placeholder="Untitled deal" value={d.name} onChange={(e) => onPatch({ name: e.target.value })} />
         </div>
         <div className="deal-header-right">
@@ -853,7 +860,7 @@ function DealCard({ d, q, onPatch, onDel }) {
 }
 
 /* shared field grids */
-function DealFields({ d, isFlat, live, onPatch }) {
+function DealFields({ d, isFlat, live, onPatch, overdue }) {
   return (
     <div className="fields">
       <Field label="Annual GPV" pre="$" v={d.gpv} on={(v) => onPatch({ gpv: v })} />
@@ -867,7 +874,7 @@ function DealFields({ d, isFlat, live, onPatch }) {
       </>)}
       <Field label="Monthly SaaS amount (per location)" pre="$" v={d.saasPerMonth} on={(v) => onPatch({ saasPerMonth: v })} />
       <Field label="# locations" v={d.numLocations} on={(v) => onPatch({ numLocations: v })} />
-      <label className="fld"><span className="mini-label">Go-live date</span><input type="date" value={d.goLive} onChange={(e) => onPatch({ goLive: e.target.value })} /></label>
+      <label className="fld"><span className={`mini-label ${overdue ? "danger-label" : ""}`}>Go-live date{overdue ? " — in the past" : ""}</span><input type="date" className={overdue ? "date-overdue" : ""} value={d.goLive} onChange={(e) => onPatch({ goLive: e.target.value })} /></label>
       <Field label="Confidence" suf="%" v={d.confidence} on={(v) => onPatch({ confidence: v })} disabled={live} />
     </div>
   );
@@ -1223,7 +1230,8 @@ function Style() {
   .month-note .muted{color:var(--muted)}
 
   .overdue-badge{background:#FBECEA;border:1px solid #E7C3BE;color:var(--danger);border-radius:10px;padding:10px 14px;font-size:13px;font-weight:600;margin-bottom:14px}
-  .month-bar.has-overdue{box-shadow:0 0 0 1.5px var(--danger)}
+  .month-fill.overdue{background:var(--danger)}
+  .month-note .danger{color:var(--danger);font-weight:600}
   .month-overdue-flag{position:absolute;top:-7px;right:-6px;width:16px;height:16px;border-radius:50%;background:var(--danger);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;line-height:1}
   .aw{margin-top:22px}
   .aw-head{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px}
@@ -1243,5 +1251,11 @@ function Style() {
   .aw-empty{font-size:13px;color:var(--muted);padding:12px 0}
   .aw-overdue{margin-bottom:12px}
   .aw-overdue-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--danger);font-weight:700;margin-bottom:7px}
+
+  .deal.isoverdue{border-left:4px solid var(--danger);border-color:#E7C3BE;background:#FCF5F4}
+  .deal-overdue{background:#FBECEA;border:1px solid #E7C3BE;color:var(--danger);border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:600;margin-bottom:12px}
+  .status-pill.overdue{background:#FBECEA;color:var(--danger)}
+  .danger-label{color:var(--danger)}
+  input.date-overdue{border-color:var(--danger) !important;background:#FCF5F4}
   `}</style>);
 }
