@@ -351,9 +351,12 @@ function MonthCell({ label, prospect, signed, live, target, overdue = 0 }) {
         {overdue > 0 && <span className="month-overdue-flag" title="A deal here has a past go-live date">!</span>}
       </div>
       <div className="month-note">
-        <span className="good">{money(live)} live</span> · <span className="warn">{money(signed)} signed</span> · <span className="muted">{money(prospect)} prospect</span>
-        {overdue > 0 && <> · <span className="danger">{money(overdue)} at risk</span></>}
-        {" — "}{liveHit ? "target locked" : totalHit ? "on track" : `${money(Math.max(0, target - total))} short`}
+        {live > 0 && <span className="good">{money(live)} live</span>}
+        {signed > 0 && <>{live > 0 ? " · " : ""}<span className="warn">{money(signed)} signed</span></>}
+        {prospect > 0 && <>{live > 0 || signed > 0 ? " · " : ""}<span className="muted">{money(prospect)} prospect</span></>}
+        {overdue > 0 && <>{total - overdue > 0 ? " · " : ""}<span className="danger">{money(overdue)} at risk</span></>}
+        {total === 0 && <span className="muted">nothing dated here</span>}
+        {total > 0 && <>{" — "}<span className={liveHit ? "good" : ""}>{liveHit ? "$4M locked" : totalHit ? "on track" : `${money(Math.max(0, target - total))} short`}</span></>}
       </div>
     </div>
   );
@@ -703,6 +706,10 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
   const nowPt = nowD < qsD ? qsD : nowD;
   const monthsNow = monthsRemaining(isoDate(nowPt), q.start, q.end);
   const gpvNow = behind && monthsNow > 0 ? (t.gap * 12) / (CATCHUP_RATE * monthsNow) : 0;
+  const prospectGpv = list.reduce((s, p) => s + num(p.gpv), 0);
+  const stillShort = Math.max(0, gpvNow - prospectGpv);
+  const coveredByProspects = Math.min(prospectGpv, gpvNow);
+  const coveredPct = gpvNow > 0 ? (coveredByProspects / gpvNow) * 100 : 0;
 
   // date-aware: revenue a GPV amount earns this quarter, given its go-live date
   const revFromGpv = (gpv, goLive) => num(gpv) * CATCHUP_RATE / 12 * monthsRemaining(goLive, q.start, q.end);
@@ -740,47 +747,29 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
     <div className={`section pathgoal ${behind ? "" : "ongoal"}`}>
       <h2>Path to goal</h2>
       {behind ? (
-        <p className="section-sub">
-          You're {money(t.gap)} short of your {money(t.quota)} goal ({pct(t.attainment, 0)} there). The later a deal goes live, the fewer processing days it gets this quarter — so a later go-live closes less of your gap. Figures use a {pct(CATCHUP_RATE, 1)} take rate.
-        </p>
-      ) : (
-        <div className="pg-clear">On pace — forecast is {pct(t.attainment)} of goal, {money(-t.gap)} over. Keep {money(MONTH_TARGET)} of GPV going live each month.</div>
-      )}
-
-      <div className="pg-gpv">
-        <div className="pg-gpv-item">
-          <span className="mini-label">GPV signed &amp; rolling</span>
-          <span className="pg-gpv-val mono">{money(signedRolling)}</span>
-          <span className="pg-gpv-note">across all your deals</span>
-        </div>
-        <div className={`pg-gpv-item ${behind ? "warn" : "good"}`}>
-          <span className="mini-label">{behind ? "GPV still to close" : "GPV to close"}</span>
-          <span className="pg-gpv-val mono">{money(gpvNow)}</span>
-          <span className="pg-gpv-note">{behind ? "extra, if live now — rises the later you activate" : "goal covered — keep the pipeline full"}</span>
-        </div>
-        <div className="pg-gpv-item">
-          <span className="mini-label">Monthly target</span>
-          <span className="pg-gpv-val mono">{money(MONTH_TARGET)}</span>
-          <span className="pg-gpv-note">GPV to go live each month</span>
-        </div>
-      </div>
-
-      {behind && gpvChecks.length > 0 && (
-        <div className="pg-gpvneed">
-          <span className="pg-gpvneed-label">GPV to move to close your {money(t.gap)} gap:</span>
-          <div className="pg-gpvneed-row">
-            {gpvChecks.map((g, i) => (
-              <div className={`pg-gpvneed-item ${i === 0 ? "now" : ""}`} key={i}>
-                <span className="pg-gpvneed-when">{g.label}</span>
-                <span className="pg-gpvneed-val mono">{g.gpv != null ? money(g.gpv) : "too late"}</span>
-              </div>
-            ))}
+        <div className={`gapbar-card ${stillShort <= 0 ? "covered" : ""}`}>
+          <div className="gapbar-top">
+            <span className="gap-label">{stillShort > 0 ? "Still short to hit goal (if live now)" : "Prospects cover it — but nothing's signed yet"}</span>
+            <span className={`gap-val mono ${stillShort > 0 ? "warn" : "good"}`}>{stillShort > 0 ? money(stillShort) : "✓ covered"}{stillShort > 0 && <span className="gap-unit">GPV</span>}</span>
           </div>
-          <span className="pg-gpvneed-note">The later it activates, the more GPV it takes — same gap, fewer processing days.</span>
+          <div className="gapbar-track" title="Hatched = prospects (not signed yet)">
+            <div className="gapbar-prospect" style={{ width: `${coveredPct}%` }} />
+          </div>
+          <div className="gapbar-legend">
+            <span>Gap to close, live now: <b>{money(gpvNow)}</b></span>
+            <span className="muted"><i className="hatch-swatch" />prospects could cover <b>{money(coveredByProspects)}</b> — tentative, not signed</span>
+          </div>
+          {gpvChecks.length > 1 && (
+            <div className="gapbar-dates">Wait and the gap grows (fewer processing days): {gpvChecks.slice(1).map((g, i) => (
+              <span key={i}>{i > 0 ? " · " : ""}<b>{g.gpv != null ? money(g.gpv) : "too late"}</b> {g.label}</span>
+            ))}</div>
+          )}
         </div>
+      ) : (
+        <div className="pg-clear">On pace — {pct(t.attainment)} of goal, {money(-t.gap)} over. Keep {money(MONTH_TARGET)} of GPV going live each month.</div>
       )}
 
-      <div className="pg-sub-head">Go-live plan — {money(MONTH_TARGET)}/month target &nbsp;<span className="pg-legend-inline"><i className="sw live" /> live &nbsp;<i className="sw signed" /> signed &nbsp;<i className="sw prospect" /> prospect</span></div>
+      <div className="pg-sub-head">Go-live plan — {money(MONTH_TARGET)}/mo &nbsp;<span className="pg-legend-inline"><i className="sw live" /> live &nbsp;<i className="sw signed" /> signed &nbsp;<i className="sw prospect" /> prospect &nbsp;<i className="sw atrisk" /> at risk</span></div>
       <div className="month-strip">
         {monthData.map((md, i) => (
           <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={MONTH_TARGET} overdue={md.overdue} />
@@ -810,8 +799,8 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
         })}
         {list.length > 0 && (
           <div className="pg-prospect-totals">
-            <span>Prospects add <b className="mono">{money(list.reduce((s, p) => s + num(p.gpv), 0))}</b> GPV</span>
-            <span className="muted">counted in the monthly bars above by go-live date</span>
+            <span>Prospects add <b className="mono">{money(prospectGpv)}</b> GPV</span>
+            {behind && <span className={stillShort <= 0 ? "good strong" : "warn strong"}>{stillShort <= 0 ? `Enough — ${money(prospectGpv - gpvNow)} to spare` : `Still short ${money(stillShort)} GPV`}</span>}
           </div>
         )}
       </div>
@@ -1257,5 +1246,25 @@ function Style() {
   .status-pill.overdue{background:#FBECEA;color:var(--danger)}
   .danger-label{color:var(--danger)}
   input.date-overdue{border-color:var(--danger) !important;background:#FCF5F4}
+
+  .gap-card{display:flex;justify-content:space-between;align-items:center;gap:18px;background:var(--warn-soft);border:1px solid #EEDBBB;border-radius:13px;padding:16px 20px;margin-bottom:18px;flex-wrap:wrap}
+  .gap-card.covered{background:var(--good-soft);border-color:#C7E4D6}
+  .gap-main{display:flex;flex-direction:column;gap:2px}
+  .gap-label{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+  .gap-val{font-size:30px;font-weight:600}
+  .gap-val.warn{color:var(--warn)} .gap-val.good{color:var(--good)}
+  .gap-unit{font-size:13px;color:var(--muted);font-weight:600;margin-left:7px}
+  .gap-breakdown{font-size:13px;color:var(--ink);text-align:right;max-width:360px;line-height:1.5}
+  .sw.atrisk{background:var(--danger)}
+
+  .gapbar-card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:16px 20px;margin-bottom:18px}
+  .gapbar-card.covered{background:var(--good-soft);border-color:#C7E4D6}
+  .gapbar-top{display:flex;justify-content:space-between;align-items:baseline;gap:14px;margin-bottom:11px;flex-wrap:wrap}
+  .gapbar-track{height:15px;background:#EDF0F3;border-radius:6px;overflow:hidden;position:relative}
+  .gapbar-prospect{position:absolute;left:0;top:0;bottom:0;background:repeating-linear-gradient(45deg,#E4A94D,#E4A94D 5px,#F4D69B 5px,#F4D69B 10px);transition:width .25s}
+  .gapbar-legend{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;font-size:12.5px;margin-top:9px;color:var(--ink)}
+  .gapbar-legend .muted{color:var(--muted)}
+  .hatch-swatch{display:inline-block;width:11px;height:11px;border-radius:3px;background:repeating-linear-gradient(45deg,#E4A94D,#E4A94D 3px,#F4D69B 3px,#F4D69B 6px);vertical-align:-1px;margin-right:5px}
+  .gapbar-dates{font-size:11.5px;color:var(--muted);margin-top:11px;padding-top:10px;border-top:1px solid var(--line2)}
   `}</style>);
 }
