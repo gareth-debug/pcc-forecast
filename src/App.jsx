@@ -356,12 +356,9 @@ function MonthCell({ label, prospect, signed, live, target, overdue = 0 }) {
         {overdue > 0 && <span className="month-overdue-flag" title="A deal here has a past go-live date">!</span>}
       </div>
       <div className="month-note">
-        {live > 0 && <span className="good">{money(live)} live</span>}
-        {signed > 0 && <>{live > 0 ? " · " : ""}<span className="warn">{money(signed)} signed</span></>}
-        {prospect > 0 && <>{live > 0 || signed > 0 ? " · " : ""}<span className="muted">{money(prospect)} prospect</span></>}
-        {overdue > 0 && <>{total - overdue > 0 ? " · " : ""}<span className="danger">{money(overdue)} at risk</span></>}
-        {total === 0 && <span className="muted">nothing dated here</span>}
-        {total > 0 && <>{" — "}<span className={liveHit ? "good" : ""}>{liveHit ? "$4M locked" : totalHit ? "on track" : `${money(Math.max(0, target - total))} short`}</span></>}
+        <span className="good">{money(live)} active</span> · <span className="warn">{money(signed)} signed</span> · <span className="muted">{money(prospect)} prospect</span>
+        {overdue > 0 && <> · <span className="danger">{money(overdue)} at risk</span></>}
+        {" — "}<span className={liveHit ? "good" : ""}>{liveHit ? "target locked" : totalHit ? "on track" : `${money(Math.max(0, target - total))} short`}</span>
       </div>
     </div>
   );
@@ -678,7 +675,7 @@ function RepView({ rep, q, up, onDelRep, readOnly }) {
         ))}
       </Section>
 
-      <PathToGoal t={t} q={q} deals={rep.deals}
+      <PathToGoal t={t} q={q} deals={rep.deals} repSurname={(rep.name || "").split(",")[0].trim()}
         prospects={rep.prospects || []} onAddProspect={readOnly ? null : addProspect} onPatchProspect={patchProspect} onDelProspect={delProspect} onPromoteProspect={readOnly ? null : promoteProspect} />
 
       {!readOnly && <div className="rep-foot"><button className="ghost sm danger" onClick={onDelRep}>Remove rep</button></div>}
@@ -699,7 +696,7 @@ function quarterMonths(qStart, qEnd) {
   return out;
 }
 
-function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, onDelProspect, onPromoteProspect }) {
+function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, onDelProspect, onPromoteProspect, repSurname }) {
   if (t.quota <= 0) return null;
   const MONTH_TARGET = 4000000;
   const list = prospects || [];
@@ -796,13 +793,19 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
           const mk = monthKey(p.goLive);
           const monthLabel = mk != null ? `${MONTHS_SHORT[new Date(p.goLive + "T00:00:00").getMonth()]} ${new Date(p.goLive + "T00:00:00").getFullYear()}` : null;
           return (
-            <div className="prospect-row" key={p.id}>
-              <input className="line-name" placeholder="Prospect / opp name" value={p.name} onChange={(e) => onPatchProspect(p.id, { name: e.target.value })} />
-              <label className="inline-field">GPV<span className="dollar"><i>$</i><input inputMode="decimal" value={p.gpv} onChange={(e) => onPatchProspect(p.id, { gpv: e.target.value })} /></span></label>
-              <label className="inline-field">Est. go-live<input type="date" className="prospect-date" value={p.goLive || ""} onChange={(e) => onPatchProspect(p.id, { goLive: e.target.value })} /></label>
-              <div className="prospect-added">{monthLabel ? <><span className="tick">✓</span> added to {monthLabel}</> : <span className="muted">add a date</span>}</div>
-              {onPromoteProspect && <button className="promote-btn" onClick={() => onPromoteProspect(p.id)} title="Move to signed deals">→ Sign</button>}
-              <button className="x" onClick={() => onDelProspect(p.id)} aria-label="Delete prospect">×</button>
+            <div className="prospect-item" key={p.id}>
+              <div className="prospect-row">
+                <input className="line-name" placeholder="Prospect / opp name" value={p.name} onChange={(e) => onPatchProspect(p.id, { name: e.target.value })} />
+                <label className="inline-field">GPV<span className="dollar"><i>$</i><input inputMode="decimal" value={p.gpv} onChange={(e) => onPatchProspect(p.id, { gpv: e.target.value })} /></span></label>
+                <label className="inline-field">Est. go-live<input type="date" className="prospect-date" value={p.goLive || ""} onChange={(e) => onPatchProspect(p.id, { goLive: e.target.value })} /></label>
+                <div className="prospect-added">{monthLabel ? <><span className="tick">✓</span> added to {monthLabel}</> : <span className="muted">add a date</span>}</div>
+                {onPromoteProspect && <button className="promote-btn" onClick={() => onPromoteProspect(p.id)} title="Move to signed deals">→ Sign</button>}
+                <button className="x" onClick={() => onDelProspect(p.id)} aria-label="Delete prospect">×</button>
+              </div>
+              <div className="prospect-notes">
+                <label className="note-field"><span className="note-label">{repSurname ? `${repSurname}'s` : "Rep's"} next step</span><input value={p.repNextStep || ""} placeholder="what you're doing next…" onChange={(e) => onPatchProspect(p.id, { repNextStep: e.target.value })} /></label>
+                <label className="note-field mgr"><span className="note-label">Gareth's next step</span><input value={p.mgrNextStep || ""} placeholder="manager note…" onChange={(e) => onPatchProspect(p.id, { mgrNextStep: e.target.value })} /></label>
+              </div>
             </div>
           );
         })}
@@ -1277,5 +1280,14 @@ function Style() {
   .gapbar-legend .muted{color:var(--muted)}
   .hatch-swatch{display:inline-block;width:11px;height:11px;border-radius:3px;background:repeating-linear-gradient(45deg,#E4A94D,#E4A94D 3px,#F4D69B 3px,#F4D69B 6px);vertical-align:-1px;margin-right:5px}
   .gapbar-dates{font-size:11.5px;color:var(--muted);margin-top:11px;padding-top:10px;border-top:1px solid var(--line2)}
+
+  .prospect-item{border-top:1px solid var(--line2)}
+  .prospect-item .prospect-row{border-top:none}
+  .prospect-notes{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 0 12px}
+  .note-field{display:flex;flex-direction:column;gap:4px}
+  .note-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+  .note-field input{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:'Inter';background:#FBFCFD;color:var(--ink)}
+  .note-field.mgr input{background:var(--accent-soft);border-color:#CBD9EA}
+  @media(max-width:800px){ .prospect-notes{grid-template-columns:1fr} }
   `}</style>);
 }
