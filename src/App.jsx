@@ -155,11 +155,14 @@ export default function App() {
     const monthData = months.map((m) => {
       const key = m.getFullYear() * 12 + m.getMonth();
       let prospect = 0, signed = 0, live = 0, overdue = 0;
+      const dealList = [];
       reps.forEach((r) => {
-        (r.deals || []).forEach((d) => { if (monthKey(d.goLive) === key) { if (d.activated) live += num(d.gpv); else if (d.goLive < todayIsoM) overdue += num(d.gpv); else signed += num(d.gpv); } });
-        (r.prospects || []).forEach((p) => { if (monthKey(p.goLive) === key) { if (p.goLive && p.goLive < todayIsoM) overdue += num(p.gpv); else prospect += num(p.gpv); } });
+        const first = (r.name || "").split(",")[0];
+        (r.deals || []).forEach((d) => { if (monthKey(d.goLive) === key) { const g = num(d.gpv); let kind; if (d.activated) { live += g; kind = "active"; } else if (d.goLive < todayIsoM) { overdue += g; kind = "overdue"; } else { signed += g; kind = "signed"; } dealList.push({ name: d.name || "Untitled", rep: first, gpv: g, goLive: d.goLive, kind }); } });
+        (r.prospects || []).forEach((p) => { if (monthKey(p.goLive) === key) { const g = num(p.gpv); let kind; if (p.goLive && p.goLive < todayIsoM) { overdue += g; kind = "overdue"; } else { prospect += g; kind = "prospect"; } dealList.push({ name: p.name || "Prospect", rep: first, gpv: g, goLive: p.goLive, kind }); } });
       });
-      return { m, prospect, signed, live, overdue };
+      dealList.sort((a, b) => b.gpv - a.gpv);
+      return { m, prospect, signed, live, overdue, deals: dealList };
     });
     // unified upcoming list: every not-yet-live deal (signed) + prospect, with overdue flag
     const todayIso = isoDate(new Date());
@@ -332,7 +335,7 @@ function ActivationWindow({ upcoming, todayIso }) {
 }
 
 /* ---------- month cell (3-tier go-live bar) ---------- */
-function MonthCell({ label, prospect, signed, live, target, overdue = 0 }) {
+function MonthCell({ label, prospect, signed, live, target, overdue = 0, onClick, selected }) {
   const total = prospect + signed + live + overdue;
   let used = 0;
   const lw = Math.min((live / target) * 100, 100); used += lw;
@@ -342,9 +345,9 @@ function MonthCell({ label, prospect, signed, live, target, overdue = 0 }) {
   const liveHit = live >= target;
   const totalHit = total >= target;
   return (
-    <div className="month-cell">
+    <div className={`month-cell ${onClick ? "clickable" : ""} ${selected ? "selected" : ""}`} onClick={onClick}>
       <div className="month-top">
-        <span className="month-name">{label}</span>
+        <span className="month-name">{label}{onClick && <span className="month-caret">{selected ? " ▾" : " ▸"}</span>}</span>
         <span className={`month-gpv mono ${liveHit ? "good" : "warn"}`}>{money(total)}</span>
       </div>
       <div className="month-bar">
@@ -434,6 +437,7 @@ function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, 
 
 /* ---------- master ---------- */
 function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
+  const [openMonth, setOpenMonth] = useState(null);
   return (
     <div className="view">
       <h1 className="view-title">Master view</h1>
@@ -450,7 +454,7 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
           <div className="c-rep">Rep</div><div className="c-num">Q3 goal</div><div className="c-num">Banked</div>
           <div className="c-num">Pipeline</div><div className="c-num">Forecast</div><div className="c-num">Att.</div><div className="c-bar">Progress to goal</div>
         </div>
-        {team.rows.map(({ rep, t }) => (
+        {[...team.rows].sort((a, b) => b.t.attainment - a.t.attainment).map(({ rep, t }) => (
           <div className="row" key={rep.id} onClick={() => onPick(rep.id)}>
             <div className="c-rep"><span className="r-name">{rep.name}</span>{rep.code && <span className="r-code">{rep.code}</span>}</div>
             <div className="c-num mono">{money(t.quota)}</div><div className="c-num mono good">{money(t.banked)}</div>
@@ -477,9 +481,39 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
         )}
         <div className="month-strip team">
           {team.monthData.map((md, i) => (
-            <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={team.teamTarget} overdue={md.overdue} />
+            <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={team.teamTarget} overdue={md.overdue}
+              onClick={() => setOpenMonth(openMonth === i ? null : i)} selected={openMonth === i} />
           ))}
         </div>
+
+        {openMonth != null && team.monthData[openMonth] && (() => {
+          const md = team.monthData[openMonth];
+          const groups = [["active", "Active — live", "good"], ["signed", "Signed", "warn"], ["prospect", "Prospect", "muted"], ["overdue", "Overdue — past go-live", "danger"]];
+          const totalGpv = md.live + md.signed + md.prospect + md.overdue;
+          return (
+            <div className="month-detail">
+              <div className="md-head"><span><b>{MONTHS_SHORT[md.m.getMonth()]} {md.m.getFullYear()}</b> — {money(totalGpv)} GPV · {md.deals.length} deal{md.deals.length !== 1 ? "s" : ""}</span><button className="md-close" onClick={() => setOpenMonth(null)}>Close ×</button></div>
+              {md.deals.length === 0 ? <div className="md-empty">No deals dated to this month yet.</div> : groups.map(([k, lbl, cls]) => {
+                const items = md.deals.filter((d) => d.kind === k);
+                if (!items.length) return null;
+                const sub = items.reduce((s, d) => s + d.gpv, 0);
+                return (
+                  <div className="md-group" key={k}>
+                    <div className={`md-group-label ${cls}`}>{lbl} · {items.length} · {money(sub)} GPV</div>
+                    {items.map((d, j) => (
+                      <div className="md-row" key={j}>
+                        <span className="md-name">{d.name}</span>
+                        <span className="md-rep">{d.rep}</span>
+                        <span className="md-date">{d.goLive || "no date"}</span>
+                        <span className="md-gpv mono">{money(d.gpv)}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         <ActivationWindow upcoming={team.upcoming} todayIso={team.todayIso} />
 
@@ -1289,5 +1323,34 @@ function Style() {
   .note-field input{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:'Inter';background:#FBFCFD;color:var(--ink)}
   .note-field.mgr input{background:var(--accent-soft);border-color:#CBD9EA}
   @media(max-width:800px){ .prospect-notes{grid-template-columns:1fr} }
+
+  .month-cell.clickable{cursor:pointer;transition:border-color .15s,box-shadow .15s}
+  .month-cell.clickable:hover{border-color:var(--accent)}
+  .month-cell.selected{border-color:var(--accent);box-shadow:0 0 0 1.5px var(--accent)}
+  .month-caret{color:var(--muted);font-size:11px}
+  .month-detail{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0 4px}
+  .md-head{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:14px;margin-bottom:10px;flex-wrap:wrap}
+  .md-close{background:none;border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;color:var(--muted);cursor:pointer;font-family:'Inter'}
+  .md-empty{font-size:13px;color:var(--muted);padding:8px 0}
+  .md-group{margin-top:10px}
+  .md-group-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-bottom:5px}
+  .md-group-label.good{color:var(--good)} .md-group-label.warn{color:var(--warn)} .md-group-label.muted{color:var(--muted)} .md-group-label.danger{color:var(--danger)}
+  .md-row{display:grid;grid-template-columns:1fr auto auto auto;gap:12px;align-items:center;padding:7px 0;border-top:1px solid var(--line2);font-size:13px}
+  .md-name{font-weight:600;font-family:'Space Grotesk'}
+  .md-rep{font-size:12px;color:var(--muted);font-weight:600}
+  .md-date{font-family:'JetBrains Mono';font-size:12px;color:var(--ink)}
+  .md-gpv{font-weight:600;text-align:right;min-width:84px}
+  .leaderboard{margin-top:26px;padding-top:22px;border-top:1px solid var(--line)}
+  .leaderboard h2{font-size:15px;margin-bottom:14px}
+  .lb-row{display:grid;grid-template-columns:26px 1fr 2fr auto;gap:14px;align-items:center;padding:9px 0;border-top:1px solid var(--line2);cursor:pointer}
+  .lb-row:hover{background:#F7F9FC}
+  .lb-rank{font-family:'JetBrains Mono';font-size:13px;color:var(--muted);text-align:center;font-weight:600}
+  .lb-name{font-weight:600;font-family:'Space Grotesk';font-size:14px}
+  .lb-full{color:var(--muted);font-weight:500;font-size:12.5px}
+  .lb-track{height:9px;background:#EDF0F3;border-radius:5px;overflow:hidden}
+  .lb-fill{display:block;height:100%;background:var(--warn);border-radius:5px}
+  .lb-fill.good{background:var(--good)}
+  .lb-pct{font-size:14px;font-weight:600;text-align:right;min-width:52px}
+  .lb-pct.good{color:var(--good)} .lb-pct.low{color:var(--danger)}
   `}</style>);
 }
