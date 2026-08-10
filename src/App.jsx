@@ -348,7 +348,7 @@ function MonthCell({ label, prospect, signed, live, target, overdue = 0, onClick
     <div className={`month-cell ${onClick ? "clickable" : ""} ${selected ? "selected" : ""}`} onClick={onClick}>
       <div className="month-top">
         <span className="month-name">{label}{onClick && <span className="month-caret">{selected ? " ▾" : " ▸"}</span>}</span>
-        <span className={`month-gpv mono ${liveHit ? "good" : "warn"}`}>{money(total)}</span>
+        <span className={`month-gpv mono ${liveHit ? "good" : "warn"}`}>{money(total)} <span className="month-pct">({target > 0 ? pct(total / target, 0) : "0%"} to goal)</span></span>
       </div>
       <div className="month-bar">
         <div className="month-fill live" style={{ left: 0, width: `${lw}%` }} />
@@ -731,6 +731,7 @@ function quarterMonths(qStart, qEnd) {
 }
 
 function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, onDelProspect, onPromoteProspect, repSurname }) {
+  const [openMonth, setOpenMonth] = useState(null);
   if (t.quota <= 0) return null;
   const MONTH_TARGET = 4000000;
   const list = prospects || [];
@@ -763,9 +764,11 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
   const monthData = months.map((m) => {
     const key = m.getFullYear() * 12 + m.getMonth();
     let prospect = 0, signed = 0, live = 0, overdue = 0;
-    allDeals.forEach((d) => { if (monthKey(d.goLive) === key) { if (d.activated) live += num(d.gpv); else if (d.goLive < todayIso) overdue += num(d.gpv); else signed += num(d.gpv); } });
-    list.forEach((p) => { if (monthKey(p.goLive) === key) { if (p.goLive && p.goLive < todayIso) overdue += num(p.gpv); else prospect += num(p.gpv); } });
-    return { m, prospect, signed, live, overdue };
+    const dealList = [];
+    allDeals.forEach((d) => { if (monthKey(d.goLive) === key) { const g = num(d.gpv); let kind; if (d.activated) { live += g; kind = "active"; } else if (d.goLive < todayIso) { overdue += g; kind = "overdue"; } else { signed += g; kind = "signed"; } dealList.push({ name: d.name || "Untitled", gpv: g, goLive: d.goLive, kind }); } });
+    list.forEach((p) => { if (monthKey(p.goLive) === key) { const g = num(p.gpv); let kind; if (p.goLive && p.goLive < todayIso) { overdue += g; kind = "overdue"; } else { prospect += g; kind = "prospect"; } dealList.push({ name: p.name || "Prospect", gpv: g, goLive: p.goLive, kind }); } });
+    dealList.sort((a, b) => b.gpv - a.gpv);
+    return { m, prospect, signed, live, overdue, deals: dealList };
   });
 
   // date-aware GPV needed to close the gap (restored): if live now vs by each month start
@@ -812,9 +815,38 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
       <div className="pg-sub-head">Go-live plan — {money(MONTH_TARGET)}/mo &nbsp;<span className="pg-legend-inline"><i className="sw live" /> live &nbsp;<i className="sw signed" /> signed &nbsp;<i className="sw prospect" /> prospect &nbsp;<i className="sw atrisk" /> at risk</span></div>
       <div className="month-strip">
         {monthData.map((md, i) => (
-          <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={MONTH_TARGET} overdue={md.overdue} />
+          <MonthCell key={i} label={`${MONTHS_SHORT[md.m.getMonth()]} ${md.m.getFullYear()}`} prospect={md.prospect} signed={md.signed} live={md.live} target={MONTH_TARGET} overdue={md.overdue}
+            onClick={() => setOpenMonth(openMonth === i ? null : i)} selected={openMonth === i} />
         ))}
       </div>
+
+      {openMonth != null && monthData[openMonth] && (() => {
+        const md = monthData[openMonth];
+        const groups = [["active", "Active — live", "good"], ["signed", "Signed", "warn"], ["prospect", "Prospect", "muted"], ["overdue", "Overdue — past go-live", "danger"]];
+        const totalGpv = md.live + md.signed + md.prospect + md.overdue;
+        return (
+          <div className="month-detail">
+            <div className="md-head"><span><b>{MONTHS_SHORT[md.m.getMonth()]} {md.m.getFullYear()}</b> — {money(totalGpv)} GPV · {md.deals.length} deal{md.deals.length !== 1 ? "s" : ""}</span><button className="md-close" onClick={() => setOpenMonth(null)}>Close ×</button></div>
+            {md.deals.length === 0 ? <div className="md-empty">No deals dated to this month yet.</div> : groups.map(([k, lbl, cls]) => {
+              const items = md.deals.filter((d) => d.kind === k);
+              if (!items.length) return null;
+              const sub = items.reduce((s, d) => s + d.gpv, 0);
+              return (
+                <div className="md-group" key={k}>
+                  <div className={`md-group-label ${cls}`}>{lbl} · {items.length} · {money(sub)} GPV</div>
+                  {items.map((d, j) => (
+                    <div className="md-row rep" key={j}>
+                      <span className="md-name">{d.name}</span>
+                      <span className="md-date">{d.goLive || "no date"}</span>
+                      <span className="md-gpv mono">{money(d.gpv)}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
       <p className="pg-fineprint">Green = live (locked in) · solid amber = signed (won, coming) · hatched = prospect (chasing). Bucketed by go-live date.</p>
 
       <div className="pg-prospects">
@@ -1328,6 +1360,7 @@ function Style() {
   .month-cell.clickable:hover{border-color:var(--accent)}
   .month-cell.selected{border-color:var(--accent);box-shadow:0 0 0 1.5px var(--accent)}
   .month-caret{color:var(--muted);font-size:11px}
+  .month-pct{font-size:11px;font-weight:500;color:var(--muted)}
   .month-detail{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0 4px}
   .md-head{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:14px;margin-bottom:10px;flex-wrap:wrap}
   .md-close{background:none;border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;color:var(--muted);cursor:pointer;font-family:'Inter'}
@@ -1336,6 +1369,7 @@ function Style() {
   .md-group-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-bottom:5px}
   .md-group-label.good{color:var(--good)} .md-group-label.warn{color:var(--warn)} .md-group-label.muted{color:var(--muted)} .md-group-label.danger{color:var(--danger)}
   .md-row{display:grid;grid-template-columns:1fr auto auto auto;gap:12px;align-items:center;padding:7px 0;border-top:1px solid var(--line2);font-size:13px}
+  .md-row.rep{grid-template-columns:1fr auto auto}
   .md-name{font-weight:600;font-family:'Space Grotesk'}
   .md-rep{font-size:12px;color:var(--muted);font-weight:600}
   .md-date{font-family:'JetBrains Mono';font-size:12px;color:var(--ink)}
