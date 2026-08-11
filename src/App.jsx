@@ -42,7 +42,7 @@ function calcDeal(d, q) {
   const saasRev = num(d.saasPerMonth) * num(d.numLocations) * num(d.monthsActive || 12);
   const totalAnnual = gpvRev + saasRev, monthly = totalAnnual / 12;
   const mr = monthsRemaining(d.goLive, q.start, q.end), quotaCredit = monthly * mr;
-  return { effRate, totalAnnual, monthly, mr, quotaCredit, contribution: quotaCredit * (num(d.confidence) / 100) };
+  return { effRate, totalAnnual, monthly, mr, quotaCredit, contribution: quotaCredit };
 }
 function repTotals(rep, q) {
   const carried = num(rep.carryTotal);
@@ -98,7 +98,7 @@ function migrate(d) {
 }
 const blankDeal = (q) => ({ id: uid(), name: "", stage: "signed", model: "flat",
   gpv: "", avgTxn: "", flatRatePct: "", flatFixedFee: "", costToSquare: "", costMargin: "",
-  saasPerMonth: "", numLocations: "", monthsActive: 12, goLive: q.start, confidence: 75 });
+  saasPerMonth: "", numLocations: "", monthsActive: 12, goLive: q.start, confidence: 100 });
 
 /* ========================================================================= */
 export default function App() {
@@ -308,7 +308,7 @@ function ActivationWindow({ upcoming, todayIso }) {
             <div className="aw-row overdue" key={"o" + i}>
               <span className="aw-name">{u.name} <span className={`aw-kind ${u.kind}`}>{u.kind}</span></span>
               <span className="aw-rep">{u.repFirst}</span>
-              <span className="aw-date">{u.goLive}</span>
+              <span className="aw-date">{usDate(u.goLive)}</span>
               <span className="aw-gpv mono">{money(u.gpv)}</span>
             </div>
           ))}
@@ -323,7 +323,7 @@ function ActivationWindow({ upcoming, todayIso }) {
             <div className="aw-row" key={i}>
               <span className="aw-name">{u.name} <span className={`aw-kind ${u.kind}`}>{u.kind}</span></span>
               <span className="aw-rep">{u.repFirst}</span>
-              <span className="aw-date">{u.goLive}</span>
+              <span className="aw-date">{usDate(u.goLive)}</span>
               <span className="aw-gpv mono">{money(u.gpv)}</span>
             </div>
           ))}
@@ -504,7 +504,7 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
                       <div className="md-row" key={j}>
                         <span className="md-name">{d.name}</span>
                         <span className="md-rep">{d.rep}</span>
-                        <span className="md-date">{d.goLive || "no date"}</span>
+                        <span className="md-date">{d.goLive ? usDate(d.goLive) : "no date"}</span>
                         <span className="md-gpv mono">{money(d.gpv)}</span>
                       </div>
                     ))}
@@ -721,6 +721,29 @@ function RepView({ rep, q, up, onDelRep, readOnly }) {
 const CATCHUP_RATE = 0.022; // assumed average take rate for the path-to-goal maths
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const fmtDate = (d) => `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`;
+const usDate = (iso) => { if (!iso) return ""; const p = String(iso).split("-"); return p.length === 3 ? `${p[1]}/${p[2]}/${p[0]}` : String(iso); };
+function USDateInput({ value, onChange, className }) {
+  const toUS = (iso) => { if (!iso) return ""; const p = String(iso).split("-"); return p.length === 3 ? `${p[1]}/${p[2]}/${p[0]}` : ""; };
+  const [text, setText] = useState(toUS(value));
+  useEffect(() => { setText(toUS(value)); }, [value]);
+  const commit = (t) => {
+    const cleaned = (t || "").trim();
+    if (cleaned === "") { onChange(""); return; }
+    const m = cleaned.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (m) {
+      let mm = m[1].padStart(2, "0"), dd = m[2].padStart(2, "0"), yy = m[3];
+      if (yy.length === 2) yy = "20" + yy;
+      const mi = +mm, di = +dd;
+      if (mi >= 1 && mi <= 12 && di >= 1 && di <= 31) { onChange(`${yy}-${mm}-${dd}`); return; }
+    }
+    setText(toUS(value)); // invalid -> revert, never wipe stored date
+  };
+  return (
+    <input className={className} type="text" inputMode="numeric" placeholder="MM/DD/YYYY" value={text}
+      onChange={(e) => setText(e.target.value)} onBlur={() => commit(text)}
+      onKeyDown={(e) => { if (e.key === "Enter") { commit(text); e.target.blur(); } }} />
+  );
+}
 const isoDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const monthKey = (isoStr) => { if (!isoStr) return null; const d = new Date(isoStr + "T00:00:00"); return isNaN(d) ? null : d.getFullYear() * 12 + d.getMonth(); };
 function quarterMonths(qStart, qEnd) {
@@ -837,7 +860,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
                   {items.map((d, j) => (
                     <div className="md-row rep" key={j}>
                       <span className="md-name">{d.name}</span>
-                      <span className="md-date">{d.goLive || "no date"}</span>
+                      <span className="md-date">{d.goLive ? usDate(d.goLive) : "no date"}</span>
                       <span className="md-gpv mono">{money(d.gpv)}</span>
                     </div>
                   ))}
@@ -863,7 +886,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
               <div className="prospect-row">
                 <input className="line-name" placeholder="Prospect / opp name" value={p.name} onChange={(e) => onPatchProspect(p.id, { name: e.target.value })} />
                 <label className="inline-field">GPV<span className="dollar"><i>$</i><input inputMode="decimal" value={p.gpv} onChange={(e) => onPatchProspect(p.id, { gpv: e.target.value })} /></span></label>
-                <label className="inline-field">Est. go-live<input type="date" className="prospect-date" value={p.goLive || ""} onChange={(e) => onPatchProspect(p.id, { goLive: e.target.value })} /></label>
+                <label className="inline-field">Est. go-live<USDateInput className="prospect-date" value={p.goLive || ""} onChange={(v) => onPatchProspect(p.id, { goLive: v })} /></label>
                 <div className="prospect-added">{monthLabel ? <><span className="tick">✓</span> added to {monthLabel}</> : <span className="muted">add a date</span>}</div>
                 {onPromoteProspect && <button className="promote-btn" onClick={() => onPromoteProspect(p.id)} title="Move to signed deals">→ Sign</button>}
                 <button className="x" onClick={() => onDelProspect(p.id)} aria-label="Delete prospect">×</button>
@@ -891,7 +914,7 @@ function DealCard({ d, q, onPatch, onDel }) {
   const overdue = !activated && !!d.goLive && d.goLive < isoDate(new Date());
   return (
     <div className={`deal ${activated ? "islive" : overdue ? "isoverdue" : "issigned"}`}>
-      {overdue && <div className="deal-overdue">⚠ Go-live date ({d.goLive}) is in the past — update it below, or tick the deal live if it's activated.</div>}
+      {overdue && <div className="deal-overdue">⚠ Go-live date ({usDate(d.goLive)}) is in the past — update it below, or tick the deal live if it's activated.</div>}
       <div className="deal-header">
         <div className="deal-header-left">
           <span className={`status-pill ${activated ? "live" : overdue ? "overdue" : "signed"}`}>{activated ? "Activated" : overdue ? "Overdue" : "Signed"}</span>
@@ -941,8 +964,7 @@ function DealFields({ d, isFlat, live, onPatch, overdue }) {
       </>)}
       <Field label="Monthly SaaS amount (per location)" pre="$" v={d.saasPerMonth} on={(v) => onPatch({ saasPerMonth: v })} />
       <Field label="# locations" v={d.numLocations} on={(v) => onPatch({ numLocations: v })} />
-      <label className="fld"><span className={`mini-label ${overdue ? "danger-label" : ""}`}>Go-live date{overdue ? " — in the past" : ""}</span><input type="date" className={overdue ? "date-overdue" : ""} value={d.goLive} onChange={(e) => onPatch({ goLive: e.target.value })} /></label>
-      <Field label="Confidence" suf="%" v={d.confidence} on={(v) => onPatch({ confidence: v })} disabled={live} />
+      <label className="fld"><span className={`mini-label ${overdue ? "danger-label" : ""}`}>Go-live date{overdue ? " — in the past" : ""}</span><USDateInput className={overdue ? "date-overdue" : ""} value={d.goLive} onChange={(v) => onPatch({ goLive: v })} /></label>
     </div>
   );
 }
