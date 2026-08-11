@@ -161,7 +161,7 @@ export default function App() {
         (r.deals || []).forEach((d) => { if (monthKey(d.goLive) === key) { const g = num(d.gpv); let kind; if (d.activated) { live += g; kind = "active"; } else if (d.goLive < todayIsoM) { overdue += g; kind = "overdue"; } else { signed += g; kind = "signed"; } dealList.push({ name: d.name || "Untitled", rep: first, gpv: g, goLive: d.goLive, kind }); } });
         (r.prospects || []).forEach((p) => { if (monthKey(p.goLive) === key) { const g = num(p.gpv); let kind; if (p.goLive && p.goLive < todayIsoM) { overdue += g; kind = "overdue"; } else { prospect += g; kind = "prospect"; } dealList.push({ name: p.name || "Prospect", rep: first, gpv: g, goLive: p.goLive, kind }); } });
       });
-      dealList.sort((a, b) => b.gpv - a.gpv);
+      dealList.sort((a, b) => (a.goLive || "9999-12-31").localeCompare(b.goLive || "9999-12-31"));
       return { m, prospect, signed, live, overdue, deals: dealList };
     });
     // unified upcoming list: every not-yet-live deal (signed) + prospect, with overdue flag
@@ -767,7 +767,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
     const dealList = [];
     allDeals.forEach((d) => { if (monthKey(d.goLive) === key) { const g = num(d.gpv); let kind; if (d.activated) { live += g; kind = "active"; } else if (d.goLive < todayIso) { overdue += g; kind = "overdue"; } else { signed += g; kind = "signed"; } dealList.push({ name: d.name || "Untitled", gpv: g, goLive: d.goLive, kind }); } });
     list.forEach((p) => { if (monthKey(p.goLive) === key) { const g = num(p.gpv); let kind; if (p.goLive && p.goLive < todayIso) { overdue += g; kind = "overdue"; } else { prospect += g; kind = "prospect"; } dealList.push({ name: p.name || "Prospect", gpv: g, goLive: p.goLive, kind }); } });
-    dealList.sort((a, b) => b.gpv - a.gpv);
+    dealList.sort((a, b) => (a.goLive || "9999-12-31").localeCompare(b.goLive || "9999-12-31"));
     return { m, prospect, signed, live, overdue, deals: dealList };
   });
 
