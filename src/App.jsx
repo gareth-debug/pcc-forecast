@@ -725,6 +725,7 @@ const usDate = (iso) => { if (!iso) return ""; const p = String(iso).split("-");
 function USDateInput({ value, onChange, className }) {
   const toUS = (iso) => { if (!iso) return ""; const p = String(iso).split("-"); return p.length === 3 ? `${p[1]}/${p[2]}/${p[0]}` : ""; };
   const [text, setText] = useState(toUS(value));
+  const nativeRef = useRef(null);
   useEffect(() => { setText(toUS(value)); }, [value]);
   const commit = (t) => {
     const cleaned = (t || "").trim();
@@ -738,10 +739,18 @@ function USDateInput({ value, onChange, className }) {
     }
     setText(toUS(value)); // invalid -> revert, never wipe stored date
   };
+  const openPicker = () => { const el = nativeRef.current; if (!el) return; try { el.showPicker(); } catch (e) { el.focus(); el.click(); } };
   return (
-    <input className={className} type="text" inputMode="numeric" placeholder="MM/DD/YYYY" value={text}
-      onChange={(e) => setText(e.target.value)} onBlur={() => commit(text)}
-      onKeyDown={(e) => { if (e.key === "Enter") { commit(text); e.target.blur(); } }} />
+    <span className={`usdate ${className || ""}`}>
+      <input type="text" className="usdate-text" inputMode="numeric" placeholder="MM/DD/YYYY" value={text}
+        onChange={(e) => setText(e.target.value)} onBlur={() => commit(text)}
+        onKeyDown={(e) => { if (e.key === "Enter") { commit(text); e.currentTarget.blur(); } }} />
+      <button type="button" className="usdate-cal" onClick={openPicker} aria-label="Open calendar" title="Pick from calendar">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      </button>
+      <input ref={nativeRef} type="date" className="usdate-native" tabIndex={-1} aria-hidden="true"
+        value={value || ""} onChange={(e) => onChange(e.target.value)} />
+    </span>
   );
 }
 const isoDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -886,7 +895,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
               <div className="prospect-row">
                 <input className="line-name" placeholder="Prospect / opp name" value={p.name} onChange={(e) => onPatchProspect(p.id, { name: e.target.value })} />
                 <label className="inline-field">GPV<span className="dollar"><i>$</i><input inputMode="decimal" value={p.gpv} onChange={(e) => onPatchProspect(p.id, { gpv: e.target.value })} /></span></label>
-                <label className="inline-field">Est. go-live<USDateInput className="prospect-date" value={p.goLive || ""} onChange={(v) => onPatchProspect(p.id, { goLive: v })} /></label>
+                <label className="inline-field">Est. go-live<USDateInput value={p.goLive || ""} onChange={(v) => onPatchProspect(p.id, { goLive: v })} /></label>
                 <div className="prospect-added">{monthLabel ? <><span className="tick">✓</span> added to {monthLabel}</> : <span className="muted">add a date</span>}</div>
                 {onPromoteProspect && <button className="promote-btn" onClick={() => onPromoteProspect(p.id)} title="Move to signed deals">→ Sign</button>}
                 <button className="x" onClick={() => onDelProspect(p.id)} aria-label="Delete prospect">×</button>
@@ -1408,5 +1417,12 @@ function Style() {
   .lb-fill.good{background:var(--good)}
   .lb-pct{font-size:14px;font-weight:600;text-align:right;min-width:52px}
   .lb-pct.good{color:var(--good)} .lb-pct.low{color:var(--danger)}
+
+  .usdate{position:relative;display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:8px;background:#FBFCFD;padding-right:4px}
+  .usdate-text{border:none;background:transparent;padding:8px 4px 8px 10px;font-family:'JetBrains Mono';font-size:12px;color:var(--ink);width:96px;outline:none}
+  .usdate-cal{border:none;background:none;cursor:pointer;color:var(--muted);display:grid;place-items:center;padding:3px;border-radius:6px}
+  .usdate-cal:hover{color:var(--accent);background:var(--accent-soft)}
+  .usdate-native{position:absolute;right:6px;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none;border:none;padding:0}
+  .usdate.date-overdue{border-color:var(--danger);background:#FCF5F4}
   `}</style>);
 }
