@@ -44,6 +44,27 @@ function calcDeal(d, q) {
   const mr = monthsRemaining(d.goLive, q.start, q.end), quotaCredit = monthly * mr;
   return { effRate, totalAnnual, monthly, mr, quotaCredit, contribution: quotaCredit };
 }
+function nextQuarterRollin(rep, q) {
+  const nq = nextQuarter(q.end);
+  const q4s = new Date(nq.start + "T00:00:00"), q4e = new Date(nq.end + "T23:59:59");
+  const dayMs = 86400000;
+  const overlapDays = (goLive) => {
+    if (!goLive) return 0;
+    const s = new Date(goLive + "T00:00:00"); if (isNaN(s)) return 0;
+    const e = new Date(s); e.setDate(e.getDate() + 90);
+    const oS = s > q4s ? s : q4s, oE = e < q4e ? e : q4e;
+    return Math.max(0, Math.round((oE - oS) / dayMs));
+  };
+  let live = 0, signed = 0;
+  (rep.deals || []).forEach((d) => {
+    const c = calcDeal(d, q);
+    const daily = c.totalAnnual / 365;
+    const roll = daily * overlapDays(d.goLive);
+    if (d.activated) live += roll; else signed += roll;
+  });
+  return { nq, live, signed, total: live + signed };
+}
+
 function repTotals(rep, q) {
   const carried = num(rep.carryTotal);
   const loans = (rep.loans || []).reduce((s, l) => s + num(l.revenue), 0);
@@ -178,9 +199,13 @@ export default function App() {
     const overdueMonths = {};
     upcoming.forEach((u) => { if (u.overdue) { const k = monthKey(u.goLive); if (k != null) overdueMonths[k] = true; } });
     const movers = [...upcoming].sort((a, b) => b.gpv - a.gpv);
+    let nextLive = 0, nextSigned = 0, nextQuotaSum = 0;
+    reps.forEach((r) => { const rr = nextQuarterRollin(r, q); nextLive += rr.live; nextSigned += rr.signed; nextQuotaSum += num(r.nextQuota); });
+    const nqLabel = nextQuarter(q.end).label;
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
       teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length,
-      upcoming, overdueCount, overdueGpv, overdueMonths, todayIso };
+      upcoming, overdueCount, overdueGpv, overdueMonths, todayIso,
+      nextLive, nextSigned, nextTotal: nextLive + nextSigned, nextQuotaSum, nqLabel };
   }, [data, viewId]);
 
   const editQuarter = (nq) => update((d, cq) => { cq.label = nq.label; cq.start = nq.start; cq.end = nq.end; });
@@ -438,6 +463,7 @@ function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, 
 /* ---------- master ---------- */
 function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
   const [openMonth, setOpenMonth] = useState(null);
+  const [openNextQ, setOpenNextQ] = useState(false);
   return (
     <div className="view">
       <h1 className="view-title">Master view</h1>
@@ -532,11 +558,59 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
         )}
       </div>
 
+      <div className="section nextq team-nextq">
+        <button className="nextq-toggle" onClick={() => setOpenNextQ((o) => !o)}>{openNextQ ? "▾" : "▸"} Team next quarter outlook — {team.nqLabel}</button>
+        {openNextQ && (() => {
+          const nt = team.nextTotal, nq = team.nextQuotaSum, att = nq ? nt / nq : 0;
+          return (
+            <div className="nextq-body">
+              <p className="section-sub">Revenue already rolling into {team.nqLabel} across the whole team, from signed &amp; live deals' 90-day processing windows. Reps set their own {team.nqLabel} goals on their tabs. Estimate only.</p>
+              <div className="nextq-rows">
+                <div className="nextq-row"><span className="nextq-lbl"><i className="sw good" /> From signed &amp; live <em>already processing</em></span><b className="mono good">{money(team.nextLive)}</b></div>
+                <div className="nextq-row"><span className="nextq-lbl"><i className="sw warn" /> From signed <em>not yet live</em></span><b className="mono warn">{money(team.nextSigned)}</b></div>
+                <div className="nextq-row total"><span className="nextq-lbl">Total rolling into {team.nqLabel}</span><b className="mono">{money(nt)}</b></div>
+              </div>
+              <div className="nextq-att">{nq > 0 ? <>= <b className={att >= 1 ? "good" : "warn"}>{pct(att, 0)}</b> towards the team's combined <b>{money(nq)}</b> goal</> : <span className="muted">Reps haven't set {team.nqLabel} goals yet.</span>}</div>
+            </div>
+          );
+        })()}
+      </div>
+
       {!readOnly && (
         <div className="team-foot">
           <button className="ghost sm" onClick={onCloseQuarter}>Close quarter &amp; start next</button>
           <button className="ghost sm danger" onClick={onReset}>Reset this quarter</button>
           <span className="team-foot-note">“Close quarter” archives this one (still viewable) and opens the next fresh. “Reset” wipes only this quarter back to the roster at $0.</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- next quarter outlook ---------- */
+function NextQuarter({ rep, q, up }) {
+  const [open, setOpen] = useState(false);
+  const { nq, live, signed, total } = nextQuarterRollin(rep, q);
+  const quota = num(rep.nextQuota);
+  const att = quota ? total / quota : 0;
+  const gap = Math.max(0, quota - total);
+  const gpvNeeded = quota > 0 ? (gap * 12) / (CATCHUP_RATE * 3) : 0;
+  return (
+    <div className="section nextq">
+      <button className="nextq-toggle" onClick={() => setOpen((o) => !o)}>{open ? "▾" : "▸"} Next quarter outlook — {nq.label}</button>
+      {open && (
+        <div className="nextq-body">
+          <p className="section-sub">A look ahead: revenue already rolling into {nq.label} from your signed &amp; live deals (each deal processes for 90 days from go-live — this is the slice landing in {nq.label}). An estimate to sense-check you're entering the quarter with enough.</p>
+          <label className="nextq-goal">{nq.label} goal (quota)<span className="dollar"><i>$</i><input inputMode="decimal" value={rep.nextQuota || ""} placeholder="set your target" onChange={(e) => up((r) => (r.nextQuota = e.target.value))} /></span></label>
+          <div className="nextq-rows">
+            <div className="nextq-row"><span className="nextq-lbl"><i className="sw good" /> Revenue from signed &amp; live <em>expected profit, already processing</em></span><b className="mono good">{money(live)}</b></div>
+            <div className="nextq-row"><span className="nextq-lbl"><i className="sw warn" /> Revenue from signed deals <em>not yet live</em></span><b className="mono warn">{money(signed)}</b></div>
+            <div className="nextq-row total"><span className="nextq-lbl">Total rolling into {nq.label}</span><b className="mono">{money(total)}</b></div>
+          </div>
+          <div className="nextq-att">{quota > 0 ? <>= <b className={att >= 1 ? "good" : "warn"}>{pct(att, 0)}</b> towards your <b>{money(quota)}</b> goal</> : <span className="muted">Enter a goal above to see % to target.</span>}</div>
+          <label className="nextq-manual">Your own estimate (what you reckon your deals bring)<span className="dollar"><i>$</i><input inputMode="decimal" value={rep.nextManual || ""} placeholder="optional gut-check" onChange={(e) => up((r) => (r.nextManual = e.target.value))} /></span></label>
+          {quota > 0 && gap > 0 && <div className="nextq-gpv">To close the {money(gap)} gap: <b>{money(gpvNeeded)}</b> of GPV to build, live by {usDate(nq.start)}.</div>}
+          {quota > 0 && gap <= 0 && <div className="nextq-gpv good">On rollover alone you're already at your {nq.label} goal — anything you build is upside.</div>}
         </div>
       )}
     </div>
@@ -711,6 +785,8 @@ function RepView({ rep, q, up, onDelRep, readOnly }) {
 
       <PathToGoal t={t} q={q} deals={rep.deals} repSurname={(rep.name || "").split(",")[0].trim()}
         prospects={rep.prospects || []} onAddProspect={readOnly ? null : addProspect} onPatchProspect={patchProspect} onDelProspect={delProspect} onPromoteProspect={readOnly ? null : promoteProspect} />
+
+      <NextQuarter rep={rep} q={q} up={up} />
 
       {!readOnly && <div className="rep-foot"><button className="ghost sm danger" onClick={onDelRep}>Remove rep</button></div>}
     </div>
@@ -1424,5 +1500,21 @@ function Style() {
   .usdate-cal:hover{color:var(--accent);background:var(--accent-soft)}
   .usdate-native{position:absolute;right:6px;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none;border:none;padding:0}
   .usdate.date-overdue{border-color:var(--danger);background:#FCF5F4}
+
+  .nextq{margin-top:14px}
+  .nextq-toggle{background:none;border:1px solid var(--line);border-radius:9px;padding:11px 15px;font-weight:600;font-size:13.5px;color:var(--ink);cursor:pointer;font-family:'Space Grotesk';width:100%;text-align:left}
+  .nextq-toggle:hover{border-color:var(--accent);color:var(--accent)}
+  .team-nextq{margin-top:22px}
+  .nextq-body{border:1px solid var(--line);border-top:none;border-radius:0 0 12px 12px;padding:16px 18px;margin-top:-4px}
+  .nextq-goal,.nextq-manual{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:13px;font-weight:600;padding:10px 0;border-bottom:1px solid var(--line2);flex-wrap:wrap}
+  .nextq-rows{margin:12px 0}
+  .nextq-row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid var(--line2);font-size:13.5px}
+  .nextq-row.total{border-bottom:none;border-top:1.5px solid var(--line);margin-top:2px;font-weight:600}
+  .nextq-lbl{display:flex;flex-direction:column;gap:1px}
+  .nextq-lbl .sw{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:7px;vertical-align:-1px}
+  .nextq-lbl em{font-style:normal;font-size:11px;color:var(--muted);font-weight:500}
+  .nextq-att{font-size:14px;margin:8px 0 4px}
+  .nextq-gpv{font-size:13px;color:var(--ink);margin-top:12px;padding-top:12px;border-top:1px solid var(--line2)}
+  .nextq-gpv.good{color:var(--good)}
   `}</style>);
 }
