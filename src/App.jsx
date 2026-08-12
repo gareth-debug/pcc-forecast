@@ -50,19 +50,21 @@ function nextQuarterRollin(rep, q) {
   const dayMs = 86400000;
   const overlapDays = (goLive) => {
     if (!goLive) return 0;
-    const s = new Date(goLive + "T00:00:00"); if (isNaN(s)) return 0;
-    const e = new Date(s); e.setDate(e.getDate() + 90);
-    const oS = s > q4s ? s : q4s, oE = e < q4e ? e : q4e;
+    const st = new Date(goLive + "T00:00:00"); if (isNaN(st)) return 0;
+    const en = new Date(st); en.setDate(en.getDate() + 90);
+    const oS = st > q4s ? st : q4s, oE = en < q4e ? en : q4e;
     return Math.max(0, Math.round((oE - oS) / dayMs));
   };
-  let live = 0, signed = 0;
+  let signed = 0;
+  const breakdown = [];
   (rep.deals || []).forEach((d) => {
+    if (d.activated) return; // live revenue is entered manually by the rep
     const c = calcDeal(d, q);
-    const daily = c.totalAnnual / 365;
-    const roll = daily * overlapDays(d.goLive);
-    if (d.activated) live += roll; else signed += roll;
+    const amt = (c.totalAnnual / 365) * overlapDays(d.goLive);
+    if (amt > 0) { signed += amt; breakdown.push({ name: d.name || "Untitled", goLive: d.goLive, amount: amt }); }
   });
-  return { nq, live, signed, total: live + signed };
+  breakdown.sort((a, b) => b.amount - a.amount);
+  return { nq, signed, breakdown };
 }
 
 function repTotals(rep, q) {
@@ -199,13 +201,13 @@ export default function App() {
     const overdueMonths = {};
     upcoming.forEach((u) => { if (u.overdue) { const k = monthKey(u.goLive); if (k != null) overdueMonths[k] = true; } });
     const movers = [...upcoming].sort((a, b) => b.gpv - a.gpv);
-    let nextLive = 0, nextSigned = 0, nextQuotaSum = 0;
-    reps.forEach((r) => { const rr = nextQuarterRollin(r, q); nextLive += rr.live; nextSigned += rr.signed; nextQuotaSum += num(r.nextQuota); });
+    let nextSigned = 0, nextLiveManual = 0, nextQuotaSum = 0;
+    reps.forEach((r) => { const rr = nextQuarterRollin(r, q); nextSigned += rr.signed; nextLiveManual += num(r.nextLiveManual); nextQuotaSum += num(r.nextQuota); });
     const nqLabel = nextQuarter(q.end).label;
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
       teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length,
       upcoming, overdueCount, overdueGpv, overdueMonths, todayIso,
-      nextLive, nextSigned, nextTotal: nextLive + nextSigned, nextQuotaSum, nqLabel };
+      nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel };
   }, [data, viewId]);
 
   const editQuarter = (nq) => update((d, cq) => { cq.label = nq.label; cq.start = nq.start; cq.end = nq.end; });
@@ -566,8 +568,8 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
             <div className="nextq-body">
               <p className="section-sub">Revenue already rolling into {team.nqLabel} across the whole team, from signed &amp; live deals' 90-day processing windows. Reps set their own {team.nqLabel} goals on their tabs. Estimate only.</p>
               <div className="nextq-rows">
-                <div className="nextq-row"><span className="nextq-lbl"><i className="sw good" /> From signed &amp; live <em>already processing</em></span><b className="mono good">{money(team.nextLive)}</b></div>
-                <div className="nextq-row"><span className="nextq-lbl"><i className="sw warn" /> From signed <em>not yet live</em></span><b className="mono warn">{money(team.nextSigned)}</b></div>
+                <div className="nextq-row"><span className="nextq-lbl"><i className="sw warn" /> From signed deals <em>not yet live — auto rollover</em></span><b className="mono warn">{money(team.nextSigned)}</b></div>
+                <div className="nextq-row"><span className="nextq-lbl"><i className="sw good" /> From live deals <em>entered by reps</em></span><b className="mono good">{money(team.nextLiveManual)}</b></div>
                 <div className="nextq-row total"><span className="nextq-lbl">Total rolling into {team.nqLabel}</span><b className="mono">{money(nt)}</b></div>
               </div>
               <div className="nextq-att">{nq > 0 ? <>= <b className={att >= 1 ? "good" : "warn"}>{pct(att, 0)}</b> towards the team's combined <b>{money(nq)}</b> goal</> : <span className="muted">Reps haven't set {team.nqLabel} goals yet.</span>}</div>
@@ -590,7 +592,10 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
 /* ---------- next quarter outlook ---------- */
 function NextQuarter({ rep, q, up }) {
   const [open, setOpen] = useState(false);
-  const { nq, live, signed, total } = nextQuarterRollin(rep, q);
+  const [showDeals, setShowDeals] = useState(false);
+  const { nq, signed, breakdown } = nextQuarterRollin(rep, q);
+  const liveManual = num(rep.nextLiveManual);
+  const total = signed + liveManual;
   const quota = num(rep.nextQuota);
   const att = quota ? total / quota : 0;
   const gap = Math.max(0, quota - total);
@@ -600,17 +605,30 @@ function NextQuarter({ rep, q, up }) {
       <button className="nextq-toggle" onClick={() => setOpen((o) => !o)}>{open ? "▾" : "▸"} Next quarter outlook — {nq.label}</button>
       {open && (
         <div className="nextq-body">
-          <p className="section-sub">A look ahead: revenue already rolling into {nq.label} from your signed &amp; live deals (each deal processes for 90 days from go-live — this is the slice landing in {nq.label}). An estimate to sense-check you're entering the quarter with enough.</p>
+          <p className="section-sub">A look ahead at {nq.label}. Revenue from signed deals rolls over automatically (each deal processes 90 days from go-live — this is the slice landing in {nq.label}). Enter what your already-live deals will bring, set a goal, and see where you'd land. Estimate only.</p>
           <label className="nextq-goal">{nq.label} goal (quota)<span className="dollar"><i>$</i><input inputMode="decimal" value={rep.nextQuota || ""} placeholder="set your target" onChange={(e) => up((r) => (r.nextQuota = e.target.value))} /></span></label>
           <div className="nextq-rows">
-            <div className="nextq-row"><span className="nextq-lbl"><i className="sw good" /> Revenue from signed &amp; live <em>expected profit, already processing</em></span><b className="mono good">{money(live)}</b></div>
-            <div className="nextq-row"><span className="nextq-lbl"><i className="sw warn" /> Revenue from signed deals <em>not yet live</em></span><b className="mono warn">{money(signed)}</b></div>
-            <div className="nextq-row total"><span className="nextq-lbl">Total rolling into {nq.label}</span><b className="mono">{money(total)}</b></div>
+            <div className="nextq-row">
+              <span className="nextq-lbl"><i className="sw warn" /> Revenue from signed deals <em>not yet live — rolls into {nq.label} automatically</em></span>
+              <b className="mono warn">{money(signed)}</b>
+            </div>
+            <button className="nextq-bd-toggle" onClick={() => setShowDeals((s) => !s)}>{showDeals ? "▾" : "▸"} see which deals ({breakdown.length})</button>
+            {showDeals && (
+              <div className="nextq-breakdown">
+                {breakdown.length === 0 ? <div className="nextq-bd-empty">No signed deals rolling into {nq.label} yet.</div> : breakdown.map((d, i) => (
+                  <div className="nextq-bd-row" key={i}><span className="nextq-bd-name">{d.name}</span><span className="nextq-bd-date">{usDate(d.goLive)}</span><b className="mono">{money(d.amount)}</b></div>
+                ))}
+              </div>
+            )}
+            <div className="nextq-row">
+              <span className="nextq-lbl"><i className="sw good" /> Revenue from live deals <em>you enter — actual profit flowing into {nq.label}</em></span>
+              <span className="dollar nextq-in"><i>$</i><input inputMode="decimal" value={rep.nextLiveManual || ""} placeholder="0" onChange={(e) => up((r) => (r.nextLiveManual = e.target.value))} /></span>
+            </div>
+            <div className="nextq-row total"><span className="nextq-lbl">Total towards {nq.label}</span><b className="mono">{money(total)}</b></div>
           </div>
           <div className="nextq-att">{quota > 0 ? <>= <b className={att >= 1 ? "good" : "warn"}>{pct(att, 0)}</b> towards your <b>{money(quota)}</b> goal</> : <span className="muted">Enter a goal above to see % to target.</span>}</div>
-          <label className="nextq-manual">Your own estimate (what you reckon your deals bring)<span className="dollar"><i>$</i><input inputMode="decimal" value={rep.nextManual || ""} placeholder="optional gut-check" onChange={(e) => up((r) => (r.nextManual = e.target.value))} /></span></label>
           {quota > 0 && gap > 0 && <div className="nextq-gpv">To close the {money(gap)} gap: <b>{money(gpvNeeded)}</b> of GPV to build, live by {usDate(nq.start)}.</div>}
-          {quota > 0 && gap <= 0 && <div className="nextq-gpv good">On rollover alone you're already at your {nq.label} goal — anything you build is upside.</div>}
+          {quota > 0 && gap <= 0 && <div className="nextq-gpv good">Already at your {nq.label} goal — anything more is upside.</div>}
         </div>
       )}
     </div>
@@ -1516,5 +1534,14 @@ function Style() {
   .nextq-att{font-size:14px;margin:8px 0 4px}
   .nextq-gpv{font-size:13px;color:var(--ink);margin-top:12px;padding-top:12px;border-top:1px solid var(--line2)}
   .nextq-gpv.good{color:var(--good)}
+
+  .dollar.nextq-in{border:1px solid var(--line);border-radius:8px;padding:4px 8px;background:#F1F6F1}
+  .dollar.nextq-in input{width:96px;text-align:right}
+  .nextq-bd-toggle{background:none;border:none;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter';padding:4px 0 4px 18px}
+  .nextq-breakdown{padding:4px 0 8px 18px}
+  .nextq-bd-row{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line2);font-size:12.5px}
+  .nextq-bd-name{font-weight:600;font-family:'Space Grotesk'}
+  .nextq-bd-date{font-family:'JetBrains Mono';font-size:11.5px;color:var(--muted)}
+  .nextq-bd-empty{font-size:12.5px;color:var(--muted);padding:6px 0}
   `}</style>);
 }
