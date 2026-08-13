@@ -873,7 +873,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
   const nowPt = nowD < qsD ? qsD : nowD;
   const monthsNow = monthsRemaining(isoDate(nowPt), q.start, q.end);
   const gpvNow = behind && monthsNow > 0 ? (t.gap * 12) / (CATCHUP_RATE * monthsNow) : 0;
-  const prospectGpv = list.reduce((s, p) => s + num(p.gpv), 0);
+  const prospectGpv = list.reduce((s, p) => s + ((!p.goLive || p.goLive <= q.end) ? num(p.gpv) : 0), 0);
   const stillShort = Math.max(0, gpvNow - prospectGpv);
   const coveredByProspects = Math.min(prospectGpv, gpvNow);
   const coveredPct = gpvNow > 0 ? (coveredByProspects / gpvNow) * 100 : 0;
@@ -990,7 +990,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
                 <input className="line-name" placeholder="Prospect / opp name" value={p.name} onChange={(e) => onPatchProspect(p.id, { name: e.target.value })} />
                 <label className="inline-field">GPV<span className="dollar"><i>$</i><input inputMode="decimal" value={p.gpv} onChange={(e) => onPatchProspect(p.id, { gpv: e.target.value })} /></span></label>
                 <label className="inline-field">Est. go-live<USDateInput value={p.goLive || ""} onChange={(v) => onPatchProspect(p.id, { goLive: v })} /></label>
-                <div className="prospect-added">{monthLabel ? <><span className="tick">✓</span> added to {monthLabel}</> : <span className="muted">add a date</span>}</div>
+                <div className="prospect-added">{p.goLive && p.goLive > q.end ? <span className="prospect-nextq">{monthLabel} · next quarter, not counted here</span> : monthLabel ? <><span className="tick">✓</span> added to {monthLabel}</> : <span className="muted">add a date</span>}</div>
                 {onPromoteProspect && <button className="promote-btn" onClick={() => onPromoteProspect(p.id)} title="Move to signed deals">→ Sign</button>}
                 <button className="x" onClick={() => onDelProspect(p.id)} aria-label="Delete prospect">×</button>
               </div>
@@ -1354,6 +1354,7 @@ function Style() {
   .prospect-added{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--good);font-weight:600;min-width:120px;justify-content:flex-end}
   .prospect-added .tick{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:50%;background:var(--good);color:#fff;font-size:11px}
   .prospect-added .muted{color:var(--muted);font-weight:500}
+  .prospect-nextq{color:var(--muted);font-weight:600;font-size:11px;text-align:right}
   .prospect-date{border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-family:'JetBrains Mono';font-size:12px;background:#FBFCFD;color:var(--ink)}
   .pg-prospect-totals{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:12px;padding-top:12px;border-top:1.5px solid var(--line);font-size:13.5px;flex-wrap:wrap}
   .pg-prospect-totals .strong{font-weight:600}
