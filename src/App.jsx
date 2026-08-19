@@ -472,7 +472,7 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
       <p className="view-lede">Every rep's Q3 progress in one place. Green is banked, amber is weighted pipeline. Click a rep to open their tab.</p>
       <div className="kpi-row">
         <Kpi label="Team Q3 goal" value={money(team.quota)} />
-        <Kpi label="Banked" value={money(team.banked)} tone="good" hint="closed + live + loans" />
+        <Kpi label="Banked" value={money(team.banked)} tone="good" hint={`${team.quota ? pct(team.banked / team.quota, 0) : "0%"} of goal · closed + live + loans`} />
         <Kpi label="Pipeline" value={money(team.pipeline)} tone="warn" hint="signed, weighted" />
         <Kpi label="Total forecast" value={money(team.total)} tone="accent" />
         <Kpi label="Attainment" value={pct(team.attainment)} tone={team.attainment >= 1 ? "good" : ""} />
@@ -485,15 +485,15 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
         {[...team.rows].sort((a, b) => b.t.attainment - a.t.attainment).map(({ rep, t }) => (
           <div className="row" key={rep.id} onClick={() => onPick(rep.id)}>
             <div className="c-rep"><span className="r-name">{rep.name}</span>{rep.code && <span className="r-code">{rep.code}</span>}</div>
-            <div className="c-num mono">{money(t.quota)}</div><div className="c-num mono good">{money(t.banked)}</div>
-            <div className="c-num mono warn">{money(t.pipeline)}</div><div className="c-num mono strong">{money(t.total)}</div>
+            <div className="c-num mono">{money(t.quota)}</div><div className="c-num mono good">{money(t.banked)}<span className="cell-sub">({pct(t.bankedAtt, 0)})</span></div>
+            <div className="c-num mono warn">{money(t.pipeline)}<span className="cell-sub">({t.quota ? pct(t.pipeline / t.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(t.total)}</div>
             <div className={`c-num mono ${t.attainment >= 1 ? "good" : ""}`}>{pct(t.attainment, 0)}</div>
             <div className="c-bar"><Bar banked={t.banked} pipeline={t.pipeline} overdue={t.overdue} quota={t.quota} /></div>
           </div>
         ))}
         <div className="row total">
-          <div className="c-rep">Total</div><div className="c-num mono">{money(team.quota)}</div><div className="c-num mono good">{money(team.banked)}</div>
-          <div className="c-num mono warn">{money(team.pipeline)}</div><div className="c-num mono strong">{money(team.total)}</div>
+          <div className="c-rep">Total</div><div className="c-num mono">{money(team.quota)}</div><div className="c-num mono good">{money(team.banked)}<span className="cell-sub">({team.quota ? pct(team.banked / team.quota, 0) : "0%"})</span></div>
+          <div className="c-num mono warn">{money(team.pipeline)}<span className="cell-sub">({team.quota ? pct(team.pipeline / team.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(team.total)}</div>
           <div className="c-num mono">{pct(team.attainment, 0)}</div><div className="c-bar"><Bar banked={team.banked} pipeline={team.pipeline} quota={team.quota} /></div>
         </div>
       </div>
@@ -697,9 +697,9 @@ function RepView({ rep, q, up, onDelRep, readOnly }) {
       <div className="herobar">
         <Bar banked={t.banked} pipeline={t.pipeline} overdue={t.overdue} scenario={scnContribution} quota={t.quota} />
         <div className="hero-legend">
-          <span><i className="sw good" /> Banked {money(t.banked)}</span>
-          <span><i className="sw warn" /> Pipeline {money(Math.max(0, t.pipeline - t.overdue))}{t.loans > 0 ? ` · incl. ${money(t.loans)} loans` : ""}</span>
-          {t.overdue > 0 && <span><i className="sw atrisk" /> At risk {money(t.overdue)} <span className="muted">— past go-live</span></span>}
+          <span><i className="sw good" /> Banked {money(t.banked)} <span className="pct-note">({pct(t.bankedAtt, 0)} of goal)</span></span>
+          <span><i className="sw warn" /> Pipeline {money(Math.max(0, t.pipeline - t.overdue))} <span className="pct-note">({t.quota ? pct(Math.max(0, t.pipeline - t.overdue) / t.quota, 0) : "0%"} of goal)</span>{t.loans > 0 ? ` · incl. ${money(t.loans)} loans` : ""}</span>
+          {t.overdue > 0 && <span><i className="sw atrisk" /> At risk {money(t.overdue)} <span className="pct-note">({t.quota ? pct(t.overdue / t.quota, 0) : "0%"} of goal)</span></span>}
           {scenario && <span><i className="sw scn" /> If signed {money(scnContribution)}</span>}
           <span className="goal-lbl">Goal {money(t.quota)}</span>
         </div>
@@ -1544,5 +1544,8 @@ function Style() {
   .nextq-bd-name{font-weight:600;font-family:'Space Grotesk'}
   .nextq-bd-date{font-family:'JetBrains Mono';font-size:11.5px;color:var(--muted)}
   .nextq-bd-empty{font-size:12.5px;color:var(--muted);padding:6px 0}
+
+  .cell-sub{display:block;font-size:10px;font-weight:400;color:var(--muted);margin-top:1px}
+  .pct-note{color:var(--muted);font-weight:500}
   `}</style>);
 }
