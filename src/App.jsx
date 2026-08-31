@@ -518,9 +518,26 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
           const md = team.monthData[openMonth];
           const groups = [["active", "Active — live", "good"], ["signed", "Signed", "warn"], ["prospect", "Prospect", "muted"], ["overdue", "Overdue — past go-live", "danger"]];
           const totalGpv = md.live + md.signed + md.prospect + md.overdue;
+          const teamHit = totalGpv > 0 ? md.live / totalGpv : 0;
+          const byRep = {};
+          md.deals.forEach((d) => { const r = d.rep || "—"; byRep[r] = byRep[r] || { stated: 0, activated: 0 }; byRep[r].stated += d.gpv; if (d.kind === "active") byRep[r].activated += d.gpv; });
+          const repRows = Object.entries(byRep).map(([rep, v]) => ({ rep, ...v, hit: v.stated > 0 ? v.activated / v.stated : 0 })).sort((a, b) => a.hit - b.hit);
           return (
             <div className="month-detail">
               <div className="md-head"><span><b>{MONTHS_SHORT[md.m.getMonth()]} {md.m.getFullYear()}</b> — {money(totalGpv)} GPV · {md.deals.length} deal{md.deals.length !== 1 ? "s" : ""}</span><button className="md-close" onClick={() => setOpenMonth(null)}>Close ×</button></div>
+              <div className="md-accuracy">
+                <div className="md-acc-head">Forecast accuracy — stated vs actually activated</div>
+                <div className="md-acc-team">Team stated <b className="mono">{money(totalGpv)}</b> · activated <b className="mono good">{money(md.live)}</b> · <b className={teamHit >= 0.7 ? "good" : "danger"}>{pct(teamHit, 0)} landed</b></div>
+                {repRows.map((r) => (
+                  <div className="md-acc-row" key={r.rep}>
+                    <span className="md-acc-rep">{r.rep}</span>
+                    <span className="md-acc-fig">stated <b className="mono">{money(r.stated)}</b></span>
+                    <span className="md-acc-fig">active <b className="mono good">{money(r.activated)}</b></span>
+                    <span className={`md-acc-hit ${r.hit >= 0.7 ? "good" : r.hit >= 0.4 ? "warn" : "danger"}`}>{pct(r.hit, 0)} landed</span>
+                  </div>
+                ))}
+                <div className="md-acc-note">"Stated" is what's currently dated to this month; "active" is what's been ticked live. Low % = over-projected or deals slipped.</div>
+              </div>
               {md.deals.length === 0 ? <div className="md-empty">No deals dated to this month yet.</div> : groups.map(([k, lbl, cls]) => {
                 const items = md.deals.filter((d) => d.kind === k);
                 if (!items.length) return null;
@@ -953,6 +970,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
         return (
           <div className="month-detail">
             <div className="md-head"><span><b>{MONTHS_SHORT[md.m.getMonth()]} {md.m.getFullYear()}</b> — {money(totalGpv)} GPV · {md.deals.length} deal{md.deals.length !== 1 ? "s" : ""}</span><button className="md-close" onClick={() => setOpenMonth(null)}>Close ×</button></div>
+            {totalGpv > 0 && <div className="md-accuracy"><div className="md-acc-team">Stated <b className="mono">{money(totalGpv)}</b> · activated <b className="mono good">{money(md.live)}</b> · <b className={md.live / totalGpv >= 0.7 ? "good" : "danger"}>{pct(md.live / totalGpv, 0)} landed</b></div></div>}
             {md.deals.length === 0 ? <div className="md-empty">No deals dated to this month yet.</div> : groups.map(([k, lbl, cls]) => {
               const items = md.deals.filter((d) => d.kind === k);
               if (!items.length) return null;
@@ -1547,5 +1565,15 @@ function Style() {
 
   .cell-sub{display:block;font-size:10px;font-weight:400;color:var(--muted);margin-top:1px}
   .pct-note{color:var(--muted);font-weight:500}
+
+  .md-accuracy{background:#F7F9FC;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px}
+  .md-acc-head{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:700;margin-bottom:8px}
+  .md-acc-team{font-size:13.5px;margin-bottom:8px}
+  .md-acc-row{display:grid;grid-template-columns:1fr auto auto auto;gap:14px;align-items:center;padding:6px 0;border-top:1px solid var(--line2);font-size:13px}
+  .md-acc-rep{font-weight:600;font-family:'Space Grotesk'}
+  .md-acc-fig{color:var(--muted);font-size:12.5px}
+  .md-acc-hit{font-weight:700;text-align:right;min-width:88px}
+  .md-acc-hit.good{color:var(--good)} .md-acc-hit.warn{color:var(--warn)} .md-acc-hit.danger{color:var(--danger)}
+  .md-acc-note{font-size:11px;color:var(--muted);margin-top:9px;padding-top:8px;border-top:1px solid var(--line2)}
   `}</style>);
 }
