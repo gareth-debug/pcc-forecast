@@ -154,9 +154,15 @@ export default function App() {
   useEffect(() => { const id = setInterval(() => { const el = document.activeElement; const editing = el && ["INPUT","TEXTAREA","SELECT"].includes(el.tagName); if (!dirty.current && !editing) load(false); }, 20000); return () => clearInterval(id); }, [load]);
 
   const activeQ = data ? (data.quarters.find((x) => x.id === data.activeId) || data.quarters[0]) : null;
+  const previewQ = activeQ ? nextQuarter(activeQ.end) : null;
   const vId = viewId || data?.activeId;
-  const viewedQ = data ? (data.quarters.find((x) => x.id === vId) || activeQ) : null;
-  const readOnly = !!(data && viewedQ && viewedQ.id !== data.activeId);
+  const isPreview = vId === "__next__";
+  const viewedQ = data
+    ? (isPreview
+        ? { id: "__next__", label: previewQ.label, start: previewQ.start, end: previewQ.end, archived: false, reps: activeQ.reps, preview: true }
+        : (data.quarters.find((x) => x.id === vId) || activeQ))
+    : null;
+  const readOnly = !!(data && viewedQ && (isPreview || viewedQ.id !== data.activeId));
   const q = viewedQ ? { label: viewedQ.label, start: viewedQ.start, end: viewedQ.end } : null;
   const reps = viewedQ ? viewedQ.reps : [];
   const activeRep = reps.find((r) => r.id === tab);
@@ -214,13 +220,19 @@ export default function App() {
 
   const closeQuarter = () => {
     const nq = nextQuarter(activeQ.end);
-    if (!window.confirm(`Close ${activeQ.label} and start ${nq.label}?\n\n${activeQ.label} becomes read-only (still viewable in the dropdown). Everyone starts fresh at $0 for ${nq.label} — goals carry over so you can adjust them.`)) return;
+    if (!window.confirm(`Close ${activeQ.label} and start ${nq.label}?\n\n${activeQ.label} becomes read-only (still viewable in the dropdown). Everyone starts fresh for ${nq.label} — goals carry over, and any deals/prospects already dated into ${nq.label} move across automatically (no re-entry).`)) return;
     setData((p) => {
       const n = JSON.parse(JSON.stringify(p));
       const cur = n.quarters.find((x) => x.id === n.activeId); if (cur) cur.archived = true;
       const newId = slug(nq.label) + "-" + Math.random().toString(36).slice(2, 5);
       const base = cur ? cur.reps : seedRoster();
-      const freshReps = base.map((r) => ({ id: uid(), code: r.code, name: r.name, team: r.team, quota: r.quota, carryTotal: "", deals: [], loans: [], prospects: [] }));
+      const carry = nq.start; // deals/prospects dated on/after the new quarter start roll forward
+      const freshReps = base.map((r) => ({
+        id: uid(), code: r.code, name: r.name, team: r.team, quota: r.quota, carryTotal: "",
+        deals: (r.deals || []).filter((d) => d.goLive && d.goLive >= carry).map((d) => ({ ...d, id: uid() })),
+        loans: [],
+        prospects: (r.prospects || []).filter((p) => p.goLive && p.goLive >= carry).map((p) => ({ ...p, id: uid() })),
+      }));
       n.quarters.push({ id: newId, label: nq.label, start: nq.start, end: nq.end, archived: false, reps: freshReps });
       n.activeId = newId;
       return n;
@@ -254,12 +266,12 @@ export default function App() {
           <div className="brand-mark">PCC</div>
           <div><div className="brand-name">Field Team Forecast</div><div className="brand-sub">Proper Cheeky Closers</div></div>
         </div>
-        <QuarterSwitcher quarters={data.quarters} activeId={data.activeId} viewId={vId} readOnly={readOnly}
+        <QuarterSwitcher quarters={data.quarters} activeId={data.activeId} viewId={vId} readOnly={readOnly} previewLabel={previewQ ? previewQ.label : ""}
           onView={(id) => { setViewId(id); setTab("master"); }} onEdit={editQuarter} onClose={closeQuarter} />
         <div className="tb-right"><button className="ghost" onClick={exportCsv}>Export CSV</button><span className="save-pill">{readOnly ? "read-only" : status}</span></div>
       </div>
 
-      {readOnly && <div className="ro-banner">Viewing <b>{q.label}</b> — archived &amp; read-only. Switch to your current quarter in the dropdown to make changes.</div>}
+      {readOnly && <div className="ro-banner">{isPreview ? <>Previewing <b>{q.label}</b> — next-quarter go-live plan built from deals dated into it. Read-only; your live quarter is unchanged. Deals dated here carry over automatically when you close the current quarter.</> : <>Viewing <b>{q.label}</b> — archived &amp; read-only. Switch to your current quarter in the dropdown to make changes.</>}</div>}
 
       <div className="tabs">
         <button className={`tab master ${tab === "master" ? "on" : ""}`} onClick={() => setTab("master")}>
@@ -416,10 +428,11 @@ function Bar({ banked, pipeline, overdue = 0, scenario = 0, quota, slim }) {
 }
 
 /* ---------- quarter switcher ---------- */
-function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, readOnly }) {
+function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, readOnly, previewLabel }) {
   const [open, setOpen] = useState(false);
+  const isPreview = viewId === "__next__";
   const active = quarters.find((x) => x.id === activeId) || quarters[0];
-  const viewed = quarters.find((x) => x.id === viewId) || active;
+  const viewed = isPreview ? { label: `${previewLabel} · preview`, start: "", end: "" } : (quarters.find((x) => x.id === viewId) || active);
   const year = new Date((viewed.start || "") + "T00:00:00").getFullYear() || new Date().getFullYear();
   const presets = [["Q1", `${year}-01-01`, `${year}-03-31`], ["Q2", `${year}-04-01`, `${year}-06-30`],
     ["Q3", `${year}-07-01`, `${year}-09-30`], ["Q4", `${year}-10-01`, `${year}-12-31`]];
@@ -437,11 +450,15 @@ function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, 
           <div className="qc-section-label">Quarters</div>
           <div className="qc-list">
             {sorted.map((qq) => (
-              <button key={qq.id} className={`qc-qrow ${qq.id === viewed.id ? "on" : ""}`} onClick={() => { onView(qq.id); setOpen(false); }}>
+              <button key={qq.id} className={`qc-qrow ${!isPreview && qq.id === viewed.id ? "on" : ""}`} onClick={() => { onView(qq.id); setOpen(false); }}>
                 <span>{qq.label}</span>
                 <span className={`qc-qrow-meta ${qq.id === activeId ? "current" : ""}`}>{qq.id === activeId ? "current" : "archived"}</span>
               </button>
             ))}
+            <button className={`qc-qrow preview ${isPreview ? "on" : ""}`} onClick={() => { onView("__next__"); setOpen(false); }}>
+              <span>{previewLabel}</span>
+              <span className="qc-qrow-meta preview">preview →</span>
+            </button>
           </div>
           {!readOnly && (
             <>
@@ -1426,6 +1443,9 @@ function Style() {
   .qc-qrow.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
   .qc-qrow-meta{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-family:'Inter'}
   .qc-qrow-meta.current{color:var(--good)}
+  .qc-qrow.preview{border-style:dashed}
+  .qc-qrow.preview.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .qc-qrow-meta.preview{color:var(--accent)}
   .qc-close-btn{width:100%;margin-top:12px;background:var(--ink);color:#fff;border:none;border-radius:9px;padding:10px;font-weight:600;font-size:12.5px;cursor:pointer;font-family:'Inter'}
   .qc-close-btn:hover{background:#000}
 
