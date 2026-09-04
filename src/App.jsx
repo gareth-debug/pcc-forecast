@@ -79,7 +79,8 @@ function repTotals(rep, q) {
   const banked = carried;
   const pipeline = dealPipeline + overdue + loans;
   const total = banked + pipeline, quota = num(rep.quota);
-  return { carried, loans, live: 0, pipeline, overdue, banked, total, quota,
+  const loansAll = (rep.loans || []).reduce((s, l) => s + num(l.revenue), 0);
+  return { carried, loans, loansAll, loanGoal: quota * 0.1, live: 0, pipeline, overdue, banked, total, quota,
     attainment: quota ? total / quota : 0, bankedAtt: quota ? banked / quota : 0, gap: quota - total };
 }
 
@@ -177,6 +178,7 @@ export default function App() {
     const rows = reps.map((r) => ({ rep: r, t: repTotals(r, q) }));
     const sum = (k) => rows.reduce((s, x) => s + x.t[k], 0);
     const quota = sum("quota"), banked = sum("banked"), pipeline = sum("pipeline"), total = banked + pipeline;
+    const loansAll = sum("loansAll"), loanGoal = sum("loanGoal");
     const MONTH_TARGET = 4000000;
     const teamTarget = MONTH_TARGET * reps.length;
     const months = quarterMonths(q.start, q.end);
@@ -211,6 +213,7 @@ export default function App() {
     reps.forEach((r) => { const rr = nextQuarterRollin(r, q); nextSigned += rr.signed; nextLiveManual += num(r.nextLiveManual); nextQuotaSum += num(r.nextQuota); });
     const nqLabel = nextQuarter(q.end).label;
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
+      loansAll, loanGoal,
       teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length,
       upcoming, overdueCount, overdueGpv, overdueMonths, todayIso,
       nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel };
@@ -497,13 +500,14 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
       <div className="tablecard">
         <div className="row head">
           <div className="c-rep">Rep</div><div className="c-num">Q3 goal</div><div className="c-num">Banked</div>
-          <div className="c-num">Pipeline</div><div className="c-num">Forecast</div><div className="c-num">Att.</div><div className="c-bar">Progress to goal</div>
+          <div className="c-num">Pipeline</div><div className="c-num">Forecast</div><div className="c-num">Loans</div><div className="c-num">Att.</div><div className="c-bar">Progress to goal</div>
         </div>
         {[...team.rows].sort((a, b) => b.t.attainment - a.t.attainment).map(({ rep, t }) => (
           <div className="row" key={rep.id} onClick={() => onPick(rep.id)}>
             <div className="c-rep"><span className="r-name">{rep.name}</span>{rep.code && <span className="r-code">{rep.code}</span>}</div>
             <div className="c-num mono">{money(t.quota)}</div><div className="c-num mono good">{money(t.banked)}<span className="cell-sub">({pct(t.bankedAtt, 0)})</span></div>
             <div className="c-num mono warn">{money(t.pipeline)}<span className="cell-sub">({t.quota ? pct(t.pipeline / t.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(t.total)}</div>
+            <div className="c-num mono">{money(t.loansAll)}<span className={`cell-sub ${t.loanGoal && t.loansAll >= t.loanGoal ? "good" : ""}`}>({t.loanGoal ? pct(t.loansAll / t.loanGoal, 0) : "0%"})</span></div>
             <div className={`c-num mono ${t.attainment >= 1 ? "good" : ""}`}>{pct(t.attainment, 0)}</div>
             <div className="c-bar"><Bar banked={t.banked} pipeline={t.pipeline} overdue={t.overdue} quota={t.quota} /></div>
           </div>
@@ -511,6 +515,7 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
         <div className="row total">
           <div className="c-rep">Total</div><div className="c-num mono">{money(team.quota)}</div><div className="c-num mono good">{money(team.banked)}<span className="cell-sub">({team.quota ? pct(team.banked / team.quota, 0) : "0%"})</span></div>
           <div className="c-num mono warn">{money(team.pipeline)}<span className="cell-sub">({team.quota ? pct(team.pipeline / team.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(team.total)}</div>
+          <div className="c-num mono">{money(team.loansAll)}<span className={`cell-sub ${team.loanGoal && team.loansAll >= team.loanGoal ? "good" : ""}`}>({team.loanGoal ? pct(team.loansAll / team.loanGoal, 0) : "0%"})</span></div>
           <div className="c-num mono">{pct(team.attainment, 0)}</div><div className="c-bar"><Bar banked={team.banked} pipeline={team.pipeline} quota={team.quota} /></div>
         </div>
       </div>
@@ -681,6 +686,9 @@ function RepView({ rep, q, up, onDelRep, readOnly }) {
   const pendingLoans = (rep.loans || []).filter((l) => !l.completed);
   const doneLoans = (rep.loans || []).filter((l) => l.completed);
   const doneLoansTotal = doneLoans.reduce((s, l) => s + num(l.revenue), 0);
+  const loanActual = (rep.loans || []).reduce((s, l) => s + num(l.revenue), 0);
+  const loanGoal = num(rep.quota) * 0.1;
+  const loanPct = loanGoal ? loanActual / loanGoal : 0;
   const scnDeal = scenario ? calcDeal(scenario, q).contribution : 0;
   const scnLoan = scenario && scenario.hasLoan ? num(scenario.loanRevenue) : 0;
   const scnContribution = scnDeal + scnLoan;
@@ -831,6 +839,10 @@ function RepView({ rep, q, up, onDelRep, readOnly }) {
       </Section>
 
       <Section title="Loans" sub="Enter the loan revenue amount — that's 75% of the loan fee. Counts as pipeline until you tick it complete; then it drops off and its revenue lives in your closed-accounts total at the top." onAdd={readOnly ? null : addLoan} addLabel="+ Add loan">
+        <div className="loan-goal-banner">
+          <span>Loan target <b className="mono">{money(loanGoal)}</b> <span className="muted">— 10% of your {money(num(rep.quota))} quota</span></span>
+          <span className={loanPct >= 1 ? "good strong" : "warn strong"}>{money(loanActual)} so far · {pct(loanPct, 0)}</span>
+        </div>
         {pendingLoans.length === 0 && <Empty>No open loans logged.</Empty>}
         {pendingLoans.map((l) => (
           <div className="carry-row" key={l.id}>
@@ -1219,7 +1231,7 @@ function Style() {
   .mono{font-family:'JetBrains Mono'} .good{color:var(--good)} .warn{color:var(--warn)} .strong{font-weight:600}
   /* table */
   .tablecard{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff}
-  .row{display:grid;grid-template-columns:1.7fr .95fr .95fr .95fr .95fr .6fr 1.7fr;gap:14px;align-items:center;padding:15px 20px;border-bottom:1px solid var(--line2);cursor:pointer}
+  .row{display:grid;grid-template-columns:1.7fr .9fr .9fr .9fr .9fr .9fr .6fr 1.6fr;gap:13px;align-items:center;padding:15px 20px;border-bottom:1px solid var(--line2);cursor:pointer}
   .row:last-child{border-bottom:none}
   .row.head{background:#F7F8FA;cursor:default;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;padding:12px 20px}
   .row:not(.head):not(.total):hover{background:var(--sel)}
@@ -1620,5 +1632,8 @@ function Style() {
   .md-acc-hit{font-weight:700;text-align:right;min-width:88px}
   .md-acc-hit.good{color:var(--good)} .md-acc-hit.warn{color:var(--warn)} .md-acc-hit.danger{color:var(--danger)}
   .md-acc-note{font-size:11px;color:var(--muted);margin-top:9px;padding-top:8px;border-top:1px solid var(--line2)}
+
+  .loan-goal-banner{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;background:var(--warn-soft);border:1px solid #EEDBBB;border-radius:11px;padding:12px 15px;margin-bottom:12px;font-size:13.5px}
+  .loan-goal-banner .strong{font-weight:600}
   `}</style>);
 }
