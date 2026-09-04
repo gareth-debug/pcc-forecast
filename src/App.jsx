@@ -811,14 +811,17 @@ function RepView({ rep, q, up, onDelRep, readOnly }) {
             <button className="activated-toggle" onClick={() => setShowActivated((s) => !s)}>
               {showActivated ? "▾" : "▸"} Activated this quarter ({activeDeals.length}) · {money(activeGpv)} GPV live
             </button>
-            {showActivated && activeDeals.map((d) => (
-              <div className="activated-row" key={d.id}>
-                <span className="activated-name">{d.name || "Untitled deal"}</span>
-                <span className="activated-meta">{d.goLive || "no date"}</span>
-                <span className="activated-gpv mono">{money(num(d.gpv))} GPV</span>
-                {!readOnly && <button className="ghost sm" onClick={() => up((r) => { const x = r.deals.find((y) => y.id === d.id); if (x) x.activated = false; })}>Undo</button>}
-              </div>
-            ))}
+            {showActivated && activeDeals.map((d) => {
+              const ec = calcDeal(d, q);
+              return (
+                <div className="activated-row" key={d.id}>
+                  <span className="activated-name">{d.name || "Untitled deal"}</span>
+                  <span className="activated-meta">{d.goLive ? usDate(d.goLive) : "no date"}</span>
+                  <span className="activated-gpv mono">{money(num(d.gpv))} GPV <span className="activated-rev">(exp. {money(ec.contribution)} rev)</span></span>
+                  {!readOnly && <button className="ghost sm" onClick={() => up((r) => { const x = r.deals.find((y) => y.id === d.id); if (x) x.activated = false; })}>Undo</button>}
+                </div>
+              );
+            })}
           </div>
         )}
       </Section>
@@ -1455,6 +1458,7 @@ function Style() {
   .activated-name{font-weight:600;font-family:'Space Grotesk'}
   .activated-meta{font-family:'JetBrains Mono';font-size:12px;color:var(--muted)}
   .activated-gpv{font-weight:600;color:var(--good)}
+  .activated-rev{font-weight:500;color:var(--muted);font-size:11.5px}
   .promote-btn{background:var(--good-soft);border:1px solid #C7E4D6;color:var(--good);border-radius:8px;padding:7px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter';white-space:nowrap}
   .promote-btn:hover{background:var(--good);color:#fff}
 
