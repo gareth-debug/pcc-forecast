@@ -69,7 +69,7 @@ function nextQuarterRollin(rep, q) {
 
 function repTotals(rep, q) {
   const carried = num(rep.carryTotal);
-  const loans = (rep.loans || []).reduce((s, l) => s + num(l.revenue), 0);
+  const loans = (rep.loans || []).filter((l) => !l.completed).reduce((s, l) => s + num(l.revenue), 0);
   const today = isoDate(new Date());
   let dealPipeline = 0, overdue = 0;
   (rep.deals || []).filter((d) => !d.activated).forEach((d) => {
@@ -673,10 +673,14 @@ function NextQuarter({ rep, q, up }) {
 function RepView({ rep, q, up, onDelRep, readOnly }) {
   const [scenario, setScenario] = useState(null);
   const [showActivated, setShowActivated] = useState(false);
+  const [showDoneLoans, setShowDoneLoans] = useState(false);
   const t = repTotals(rep, q);
   const pendingDeals = (rep.deals || []).filter((d) => !d.activated);
   const activeDeals = (rep.deals || []).filter((d) => d.activated);
   const activeGpv = activeDeals.reduce((s, d) => s + num(d.gpv), 0);
+  const pendingLoans = (rep.loans || []).filter((l) => !l.completed);
+  const doneLoans = (rep.loans || []).filter((l) => l.completed);
+  const doneLoansTotal = doneLoans.reduce((s, l) => s + num(l.revenue), 0);
   const scnDeal = scenario ? calcDeal(scenario, q).contribution : 0;
   const scnLoan = scenario && scenario.hasLoan ? num(scenario.loanRevenue) : 0;
   const scnContribution = scnDeal + scnLoan;
@@ -826,16 +830,32 @@ function RepView({ rep, q, up, onDelRep, readOnly }) {
         )}
       </Section>
 
-      <Section title="Loans" sub="Enter the loan revenue amount — that's 75% of the loan fee. Counts toward pipeline." onAdd={readOnly ? null : addLoan} addLabel="+ Add loan">
-        {rep.loans.length === 0 && <Empty>No loans logged.</Empty>}
-        {rep.loans.map((l) => (
+      <Section title="Loans" sub="Enter the loan revenue amount — that's 75% of the loan fee. Counts as pipeline until you tick it complete; then it drops off and its revenue lives in your closed-accounts total at the top." onAdd={readOnly ? null : addLoan} addLabel="+ Add loan">
+        {pendingLoans.length === 0 && <Empty>No open loans logged.</Empty>}
+        {pendingLoans.map((l) => (
           <div className="carry-row" key={l.id}>
             <input className="line-name" placeholder="Loan / client name" value={l.name} onChange={(e) => up((r) => (r.loans.find((x) => x.id === l.id).name = e.target.value))} />
             <label className="inline-field">Loan revenue (75% of fee)<span className="dollar"><i>$</i><input inputMode="decimal" value={l.revenue} onChange={(e) => up((r) => (r.loans.find((x) => x.id === l.id).revenue = e.target.value))} /></span></label>
             <div className="contrib warn mono">{money(num(l.revenue))}</div>
+            <button className={`nowlive-btn ${readOnly ? "" : ""}`} onClick={() => { if (window.confirm(`Mark "${l.name || "this loan"}" complete? It comes off pipeline — its revenue now sits in your closed-accounts total at the top.`)) up((r) => { const x = r.loans.find((y) => y.id === l.id); if (x) x.completed = true; }); }}><span className="nowlive-box" /> Complete?</button>
             <button className="x" onClick={() => up((r) => (r.loans = r.loans.filter((x) => x.id !== l.id)))}>×</button>
           </div>
         ))}
+        {doneLoans.length > 0 && (
+          <div className="activated-group">
+            <button className="activated-toggle" onClick={() => setShowDoneLoans((s) => !s)}>
+              {showDoneLoans ? "▾" : "▸"} Completed loans ({doneLoans.length}) · {money(doneLoansTotal)} banked
+            </button>
+            {showDoneLoans && doneLoans.map((l) => (
+              <div className="activated-row" key={l.id}>
+                <span className="activated-name">{l.name || "Loan"}</span>
+                <span className="activated-meta">complete</span>
+                <span className="activated-gpv mono">{money(num(l.revenue))} rev</span>
+                {!readOnly && <button className="ghost sm" onClick={() => up((r) => { const x = r.loans.find((y) => y.id === l.id); if (x) x.completed = false; })}>Undo</button>}
+              </div>
+            ))}
+          </div>
+        )}
       </Section>
 
       <PathToGoal t={t} q={q} deals={rep.deals} repSurname={(rep.name || "").split(",")[0].trim()}
@@ -1267,7 +1287,8 @@ function Style() {
   .primary{background:var(--accent);color:#fff;border:none;border-radius:9px;padding:10px 16px;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap;font-family:'Inter'}
   .primary:hover{background:#1F5595}
   .empty{border:1px dashed var(--line);border-radius:12px;padding:22px;text-align:center;color:var(--muted);font-size:13px}
-  .carry-row{display:grid;grid-template-columns:1fr auto auto auto;gap:18px;align-items:end;border:1px solid var(--line);border-radius:12px;padding:15px 17px;margin-bottom:10px;background:#fff}
+  .carry-row{display:grid;grid-template-columns:1fr auto auto auto auto;gap:14px;align-items:end;border:1px solid var(--line);border-radius:12px;padding:15px 17px;margin-bottom:10px;background:#fff}
+  @media(max-width:820px){ .carry-row{grid-template-columns:1fr auto auto} }
   .line-name{border:none;border-bottom:1.5px solid var(--line);font-family:'Space Grotesk';font-weight:600;font-size:15px;padding:5px 0;outline:none;background:transparent;color:var(--ink)}
   .line-name.big{flex:1} .line-name:focus{border-bottom-color:var(--accent)}
   .inline-field{display:flex;flex-direction:column;gap:5px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
