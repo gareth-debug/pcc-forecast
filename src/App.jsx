@@ -812,7 +812,8 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
         <Bar banked={t.banked} pipeline={t.pipeline} overdue={t.overdue} scenario={scnContribution} quota={t.quota} />
         <div className="hero-legend">
           <span><i className="sw good" /> Banked {money(t.banked)} <span className="pct-note">({pct(t.bankedAtt, 0)} of goal)</span></span>
-          <span><i className="sw warn" /> Pipeline {money(Math.max(0, t.pipeline - t.overdue))} <span className="pct-note">({t.quota ? pct(Math.max(0, t.pipeline - t.overdue) / t.quota, 0) : "0%"} of goal)</span>{t.loans > 0 ? ` · incl. ${money(t.loans)} loans` : ""}</span>
+          <span><i className="sw warn" /> Signed deals {money(Math.max(0, t.pipeline - t.overdue - t.loans))} <span className="pct-note">({t.quota ? pct(Math.max(0, t.pipeline - t.overdue - t.loans) / t.quota, 0) : "0%"} of goal)</span></span>
+          {t.loans > 0 && <span><i className="sw loanmark" /> Loans {money(t.loans)} <span className="pct-note">({t.quota ? pct(t.loans / t.quota, 0) : "0%"} of goal)</span></span>}
           {t.overdue > 0 && <span><i className="sw atrisk" /> At risk {money(t.overdue)} <span className="pct-note">({t.quota ? pct(t.overdue / t.quota, 0) : "0%"} of goal)</span></span>}
           {scenario && <span><i className="sw scn" /> If signed {money(scnContribution)}</span>}
           <span className="goal-lbl">Goal {money(t.quota)}</span>
@@ -1334,6 +1335,7 @@ function Style() {
   .hero-legend .sw,.legend-row .sw{width:11px;height:11px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:-1px}
   .seg.overdue{background:var(--danger)}
   .hero-legend .muted{color:var(--muted)}
+  .hero-legend .sw.loanmark{background:#F4D69B;border:1px solid #E4A94D}
   .sw.good{background:var(--good)} .sw.warn{background:var(--warn)} .sw.scn{background:var(--scn)}
   .goal-lbl{margin-left:auto;font-family:'JetBrains Mono';color:var(--ink);font-weight:600}
   /* scratchpad */
