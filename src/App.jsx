@@ -130,6 +130,8 @@ export default function App() {
   const [tab, setTab] = useState("master");
   const [viewId, setViewId] = useState(null);
   const [status, setStatus] = useState("Loading…");
+  const [focus, setFocus] = useState(null);
+  const onOpenDeal = (repId, itemId) => { if (repId) { setTab(repId); setFocus({ id: itemId, ts: Date.now() }); } };
 
   const dirty = useRef(false);
   const lastSaved = useRef("");
@@ -155,22 +157,18 @@ export default function App() {
   useEffect(() => { const id = setInterval(() => { const el = document.activeElement; const editing = el && ["INPUT","TEXTAREA","SELECT"].includes(el.tagName); if (!dirty.current && !editing) load(false); }, 20000); return () => clearInterval(id); }, [load]);
 
   const activeQ = data ? (data.quarters.find((x) => x.id === data.activeId) || data.quarters[0]) : null;
-  const previewQ = activeQ ? nextQuarter(activeQ.end) : null;
   const vId = viewId || data?.activeId;
-  const isPreview = vId === "__next__";
-  const viewedQ = data
-    ? (isPreview
-        ? { id: "__next__", label: previewQ.label, start: previewQ.start, end: previewQ.end, archived: false, reps: activeQ.reps, preview: true }
-        : (data.quarters.find((x) => x.id === vId) || activeQ))
-    : null;
-  const readOnly = !!(data && viewedQ && (isPreview || viewedQ.id !== data.activeId));
+  const viewedQ = data ? (data.quarters.find((x) => x.id === vId) || activeQ) : null;
+  const readOnly = !!(data && viewedQ && viewedQ.archived);
   const q = viewedQ ? { label: viewedQ.label, start: viewedQ.start, end: viewedQ.end } : null;
   const reps = viewedQ ? viewedQ.reps : [];
   const activeRep = reps.find((r) => r.id === tab);
+  const nextOfViewed = viewedQ ? nextQuarter(viewedQ.end) : null;
+  const nextExists = !!(data && nextOfViewed && data.quarters.some((x) => x.start === nextOfViewed.start && x.end === nextOfViewed.end));
 
   const update = (fn) => {
     if (readOnly) return;
-    setData((p) => { const n = JSON.parse(JSON.stringify(p)); const cq = n.quarters.find((x) => x.id === n.activeId); fn(n, cq); return n; });
+    setData((p) => { const n = JSON.parse(JSON.stringify(p)); const cq = n.quarters.find((x) => x.id === (viewId || n.activeId)); if (!cq) return p; fn(n, cq); return n; });
   };
 
   const team = useMemo(() => {
@@ -199,8 +197,8 @@ export default function App() {
     const todayIso = isoDate(new Date());
     const upcoming = [];
     reps.forEach((r) => {
-      (r.deals || []).forEach((d) => { if (!d.activated && num(d.gpv) > 0) upcoming.push({ name: d.name || "Untitled", rep: r.name, repFirst: (r.name || "").split(",")[0], gpv: num(d.gpv), goLive: d.goLive, kind: "signed", overdue: !!(d.goLive && d.goLive < todayIso) }); });
-      (r.prospects || []).forEach((p) => { if (num(p.gpv) > 0) upcoming.push({ name: p.name || "Prospect", rep: r.name, repFirst: (r.name || "").split(",")[0], gpv: num(p.gpv), goLive: p.goLive, kind: "prospect", overdue: !!(p.goLive && p.goLive < todayIso) }); });
+      (r.deals || []).forEach((d) => { if (!d.activated && num(d.gpv) > 0) upcoming.push({ name: d.name || "Untitled", rep: r.name, repFirst: (r.name || "").split(",")[0], repId: r.id, itemId: d.id, gpv: num(d.gpv), goLive: d.goLive, kind: "signed", overdue: !!(d.goLive && d.goLive < todayIso) }); });
+      (r.prospects || []).forEach((p) => { if (num(p.gpv) > 0) upcoming.push({ name: p.name || "Prospect", rep: r.name, repFirst: (r.name || "").split(",")[0], repId: r.id, itemId: p.id, gpv: num(p.gpv), goLive: p.goLive, kind: "prospect", overdue: !!(p.goLive && p.goLive < todayIso) }); });
     });
     upcoming.sort((a, b) => (a.goLive || "9999") < (b.goLive || "9999") ? -1 : 1);
     const overdueCount = upcoming.filter((u) => u.overdue).length;
@@ -221,33 +219,78 @@ export default function App() {
 
   const editQuarter = (nq) => update((d, cq) => { cq.label = nq.label; cq.start = nq.start; cq.end = nq.end; });
 
-  const closeQuarter = () => {
-    const nq = nextQuarter(activeQ.end);
-    if (!window.confirm(`Close ${activeQ.label} and start ${nq.label}?\n\n${activeQ.label} becomes read-only (still viewable in the dropdown). Everyone starts fresh for ${nq.label} — goals carry over, and any deals/prospects already dated into ${nq.label} move across automatically (no re-entry).`)) return;
+  // Open the next quarter as a real, editable quarter (keep the current one live).
+  // Any deals/prospects already dated into it move across (no duplication).
+  const openNextQuarter = () => {
+    const base = viewedQ; if (!base) return;
+    const nq = nextQuarter(base.end);
+    const existing = data.quarters.find((x) => x.start === nq.start && x.end === nq.end);
+    if (existing) { setViewId(existing.id); setTab("master"); return; }
+    const newId = slug(nq.label) + "-" + Math.random().toString(36).slice(2, 5);
+    const carry = nq.start;
     setData((p) => {
       const n = JSON.parse(JSON.stringify(p));
-      const cur = n.quarters.find((x) => x.id === n.activeId); if (cur) cur.archived = true;
-      const newId = slug(nq.label) + "-" + Math.random().toString(36).slice(2, 5);
-      const base = cur ? cur.reps : seedRoster();
-      const carry = nq.start; // deals/prospects dated on/after the new quarter start roll forward
-      const freshReps = base.map((r) => ({
+      const cur = n.quarters.find((x) => x.id === base.id);
+      const srcReps = cur ? cur.reps : seedRoster();
+      const newReps = srcReps.map((r) => ({
         id: uid(), code: r.code, name: r.name, team: r.team, quota: r.quota, carryTotal: "",
         deals: (r.deals || []).filter((d) => d.goLive && d.goLive >= carry).map((d) => ({ ...d, id: uid() })),
         loans: [],
-        prospects: (r.prospects || []).filter((p) => p.goLive && p.goLive >= carry).map((p) => ({ ...p, id: uid() })),
+        prospects: (r.prospects || []).filter((pp) => pp.goLive && pp.goLive >= carry).map((pp) => ({ ...pp, id: uid() })),
       }));
-      n.quarters.push({ id: newId, label: nq.label, start: nq.start, end: nq.end, archived: false, reps: freshReps });
-      n.activeId = newId;
+      if (cur) cur.reps.forEach((r) => {
+        r.deals = (r.deals || []).filter((d) => !(d.goLive && d.goLive >= carry));
+        r.prospects = (r.prospects || []).filter((pp) => !(pp.goLive && pp.goLive >= carry));
+      });
+      n.quarters.push({ id: newId, label: nq.label, start: nq.start, end: nq.end, archived: false, reps: newReps });
       return n;
     });
-    setViewId(null); setTab("master");
+    setViewId(newId); setTab("master");
+  };
+
+  const closeQuarter = () => {
+    const base = viewedQ; if (!base) return;
+    const nq = nextQuarter(base.end);
+    const existing = data.quarters.find((x) => x.start === nq.start && x.end === nq.end);
+    if (!window.confirm(`Close ${base.label} and move to ${nq.label}?\n\n${base.label} becomes read-only (still viewable in the dropdown).${existing ? ` ${nq.label} is already open — you'll just switch to it, and any remaining ${nq.label}-dated deals move across.` : ` Goals carry over, and any deals/prospects dated into ${nq.label} move across automatically (no re-entry).`}`)) return;
+    const newId = existing ? null : slug(nq.label) + "-" + Math.random().toString(36).slice(2, 5);
+    const carry = nq.start;
+    setData((p) => {
+      const n = JSON.parse(JSON.stringify(p));
+      const cur = n.quarters.find((x) => x.id === base.id); if (cur) cur.archived = true;
+      if (existing) {
+        const ex = n.quarters.find((x) => x.id === existing.id);
+        if (cur && ex) cur.reps.forEach((r, i) => {
+          const exRep = ex.reps.find((rr) => rr.code === r.code && rr.name === r.name) || ex.reps[i];
+          const moveD = (r.deals || []).filter((d) => d.goLive && d.goLive >= carry);
+          const moveP = (r.prospects || []).filter((pp) => pp.goLive && pp.goLive >= carry);
+          if (exRep) { exRep.deals = (exRep.deals || []).concat(moveD.map((d) => ({ ...d, id: uid() }))); exRep.prospects = (exRep.prospects || []).concat(moveP.map((pp) => ({ ...pp, id: uid() }))); }
+          r.deals = (r.deals || []).filter((d) => !(d.goLive && d.goLive >= carry));
+          r.prospects = (r.prospects || []).filter((pp) => !(pp.goLive && pp.goLive >= carry));
+        });
+        n.activeId = existing.id;
+      } else {
+        const srcReps = cur ? cur.reps : seedRoster();
+        const freshReps = srcReps.map((r) => ({
+          id: uid(), code: r.code, name: r.name, team: r.team, quota: r.quota, carryTotal: "",
+          deals: (r.deals || []).filter((d) => d.goLive && d.goLive >= carry).map((d) => ({ ...d, id: uid() })),
+          loans: [],
+          prospects: (r.prospects || []).filter((pp) => pp.goLive && pp.goLive >= carry).map((pp) => ({ ...pp, id: uid() })),
+        }));
+        n.quarters.push({ id: newId, label: nq.label, start: nq.start, end: nq.end, archived: false, reps: freshReps });
+        n.activeId = newId;
+      }
+      return n;
+    });
+    setViewId(existing ? existing.id : newId); setTab("master");
   };
 
   const resetCurrent = () => {
-    const ans = window.prompt(`This wipes ${activeQ.label} back to the starting roster at $0 — it cannot be undone (archived quarters are not touched).\n\nType RESET to confirm.`);
+    const base = viewedQ; if (!base) return;
+    const ans = window.prompt(`This wipes ${base.label} back to the starting roster at $0 — it cannot be undone (other quarters are not touched).\n\nType RESET to confirm.`);
     if (ans && ans.trim().toUpperCase() === "RESET") {
-      setData((p) => { const n = JSON.parse(JSON.stringify(p)); const cq = n.quarters.find((x) => x.id === n.activeId); if (cq) cq.reps = seedRoster(); return n; });
-      setViewId(null); setTab("master");
+      setData((p) => { const n = JSON.parse(JSON.stringify(p)); const cq = n.quarters.find((x) => x.id === base.id); if (cq) cq.reps = seedRoster(); return n; });
+      setTab("master");
     }
   };
 
@@ -269,12 +312,12 @@ export default function App() {
           <div className="brand-mark">PCC</div>
           <div><div className="brand-name">Field Team Forecast</div><div className="brand-sub">Proper Cheeky Closers</div></div>
         </div>
-        <QuarterSwitcher quarters={data.quarters} activeId={data.activeId} viewId={vId} readOnly={readOnly} previewLabel={previewQ ? previewQ.label : ""}
-          onView={(id) => { setViewId(id); setTab("master"); }} onEdit={editQuarter} onClose={closeQuarter} />
+        <QuarterSwitcher quarters={data.quarters} activeId={data.activeId} viewId={vId} readOnly={readOnly} nextLabel={nextOfViewed ? nextOfViewed.label : ""} nextExists={nextExists}
+          onView={(id) => { setViewId(id); setTab("master"); }} onEdit={editQuarter} onClose={closeQuarter} onOpenNext={openNextQuarter} />
         <div className="tb-right"><button className="ghost" onClick={exportCsv}>Export CSV</button><span className="save-pill">{readOnly ? "read-only" : status}</span></div>
       </div>
 
-      {readOnly && <div className="ro-banner">{isPreview ? <>Previewing <b>{q.label}</b> — next-quarter go-live plan built from deals dated into it. Read-only; your live quarter is unchanged. Deals dated here carry over automatically when you close the current quarter.</> : <>Viewing <b>{q.label}</b> — archived &amp; read-only. Switch to your current quarter in the dropdown to make changes.</>}</div>}
+      {readOnly && <div className="ro-banner">Viewing <b>{q.label}</b> — archived &amp; read-only. Switch to a live quarter in the dropdown to make changes.</div>}
 
       <div className="tabs">
         <button className={`tab master ${tab === "master" ? "on" : ""}`} onClick={() => setTab("master")}>
@@ -295,9 +338,9 @@ export default function App() {
 
       <div className="body">
         {tab === "master" || !activeRep ? (
-          <TeamView team={team} onPick={setTab} readOnly={readOnly} onReset={resetCurrent} onCloseQuarter={closeQuarter} />
+          <TeamView team={team} onPick={setTab} onOpenDeal={onOpenDeal} readOnly={readOnly} onReset={resetCurrent} onCloseQuarter={closeQuarter} />
         ) : (
-          <RepView rep={activeRep} q={q} readOnly={readOnly}
+          <RepView rep={activeRep} q={q} readOnly={readOnly} focus={focus}
             up={(fn) => update((d, cq) => fn(cq.reps.find((r) => r.id === activeRep.id)))}
             onDelRep={() => { if (window.confirm(`Remove ${activeRep.name}?`)) { update((d, cq) => (cq.reps = cq.reps.filter((r) => r.id !== activeRep.id))); setTab("master"); } }} />
         )}
@@ -308,7 +351,7 @@ export default function App() {
 }
 
 /* ---------- activation window (manager view) ---------- */
-function ActivationWindow({ upcoming, todayIso }) {
+function ActivationWindow({ upcoming, todayIso, onOpen }) {
   const [range, setRange] = useState("month");
   const today = new Date(todayIso + "T00:00:00");
   const addDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
@@ -331,6 +374,9 @@ function ActivationWindow({ upcoming, todayIso }) {
   const overdue = upcoming.filter((u) => u.overdue);
   const tabs = [["week", "This week"], ["nextweek", "Next week"], ["month", "This month"], ["all", "All upcoming"]];
   const totalGpv = list.reduce((s, u) => s + u.gpv, 0);
+  const avgGpv = list.length ? totalGpv / list.length : 0;
+  const signedGpv = list.filter((u) => u.kind === "signed").reduce((s, u) => s + u.gpv, 0);
+  const prospectGpvS = list.filter((u) => u.kind === "prospect").reduce((s, u) => s + u.gpv, 0);
 
   return (
     <div className="aw">
@@ -343,11 +389,18 @@ function ActivationWindow({ upcoming, todayIso }) {
         </div>
       </div>
 
+      <div className="aw-summary">
+        <span><b>{list.length}</b> ops</span>
+        <span><b className="mono">{money(totalGpv)}</b> total</span>
+        <span><b className="mono">{money(avgGpv)}</b> avg</span>
+        <span><b className="warn">{totalGpv ? pct(signedGpv / totalGpv, 0) : "0%"}</b> signed · <b className="muted">{totalGpv ? pct(prospectGpvS / totalGpv, 0) : "0%"}</b> prospect</span>
+      </div>
+
       {overdue.length > 0 && (
         <div className="aw-overdue">
           <div className="aw-overdue-label">Overdue — go-live date has passed, needs a new date</div>
           {overdue.map((u, i) => (
-            <div className="aw-row overdue" key={"o" + i}>
+            <div className="aw-row overdue clickable" key={"o" + i} onClick={() => onOpen && onOpen(u.repId, u.itemId)} title="Open this deal">
               <span className="aw-name">{u.name} <span className={`aw-kind ${u.kind}`}>{u.kind}</span></span>
               <span className="aw-rep">{u.repFirst}</span>
               <span className="aw-date">{usDate(u.goLive)}</span>
@@ -362,7 +415,7 @@ function ActivationWindow({ upcoming, todayIso }) {
       ) : (
         <>
           {list.map((u, i) => (
-            <div className="aw-row" key={i}>
+            <div className="aw-row clickable" key={i} onClick={() => onOpen && onOpen(u.repId, u.itemId)} title="Open this deal">
               <span className="aw-name">{u.name} <span className={`aw-kind ${u.kind}`}>{u.kind}</span></span>
               <span className="aw-rep">{u.repFirst}</span>
               <span className="aw-date">{usDate(u.goLive)}</span>
@@ -431,11 +484,10 @@ function Bar({ banked, pipeline, overdue = 0, scenario = 0, quota, slim }) {
 }
 
 /* ---------- quarter switcher ---------- */
-function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, readOnly, previewLabel }) {
+function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, onOpenNext, readOnly, nextLabel, nextExists }) {
   const [open, setOpen] = useState(false);
-  const isPreview = viewId === "__next__";
   const active = quarters.find((x) => x.id === activeId) || quarters[0];
-  const viewed = isPreview ? { label: `${previewLabel} · preview`, start: "", end: "" } : (quarters.find((x) => x.id === viewId) || active);
+  const viewed = quarters.find((x) => x.id === viewId) || active;
   const year = new Date((viewed.start || "") + "T00:00:00").getFullYear() || new Date().getFullYear();
   const presets = [["Q1", `${year}-01-01`, `${year}-03-31`], ["Q2", `${year}-04-01`, `${year}-06-30`],
     ["Q3", `${year}-07-01`, `${year}-09-30`], ["Q4", `${year}-10-01`, `${year}-12-31`]];
@@ -453,27 +505,29 @@ function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, 
           <div className="qc-section-label">Quarters</div>
           <div className="qc-list">
             {sorted.map((qq) => (
-              <button key={qq.id} className={`qc-qrow ${!isPreview && qq.id === viewed.id ? "on" : ""}`} onClick={() => { onView(qq.id); setOpen(false); }}>
+              <button key={qq.id} className={`qc-qrow ${qq.id === viewed.id ? "on" : ""}`} onClick={() => { onView(qq.id); setOpen(false); }}>
                 <span>{qq.label}</span>
-                <span className={`qc-qrow-meta ${qq.id === activeId ? "current" : ""}`}>{qq.id === activeId ? "current" : "archived"}</span>
+                <span className={`qc-qrow-meta ${qq.id === activeId ? "current" : qq.archived ? "" : "live"}`}>{qq.id === activeId ? "current" : qq.archived ? "archived" : "live"}</span>
               </button>
             ))}
-            <button className={`qc-qrow preview ${isPreview ? "on" : ""}`} onClick={() => { onView("__next__"); setOpen(false); }}>
-              <span>{previewLabel}</span>
-              <span className="qc-qrow-meta preview">preview →</span>
-            </button>
+            {!nextExists && (
+              <button className="qc-qrow open" onClick={() => { onOpenNext(); setOpen(false); }}>
+                <span>Open {nextLabel}</span>
+                <span className="qc-qrow-meta open">build ahead →</span>
+              </button>
+            )}
           </div>
           {!readOnly && (
             <>
-              <div className="qc-section-label">Current quarter dates</div>
-              <input className="qc-title" value={active.label} onChange={(e) => onEdit({ label: e.target.value, start: active.start, end: active.end })} />
+              <div className="qc-section-label">Dates for {viewed.label}</div>
+              <input className="qc-title" value={viewed.label} onChange={(e) => onEdit({ label: e.target.value, start: viewed.start, end: viewed.end })} />
               <div className="qc-dates">
-                <label>Start<input type="date" value={active.start} onChange={(e) => onEdit({ label: active.label, start: e.target.value, end: active.end })} /></label>
-                <label>End<input type="date" value={active.end} onChange={(e) => onEdit({ label: active.label, start: active.start, end: e.target.value })} /></label>
+                <label>Start<input type="date" value={viewed.start} onChange={(e) => onEdit({ label: viewed.label, start: e.target.value, end: viewed.end })} /></label>
+                <label>End<input type="date" value={viewed.end} onChange={(e) => onEdit({ label: viewed.label, start: viewed.start, end: e.target.value })} /></label>
               </div>
               <div className="qc-presets">{presets.map(([l, s, e]) => (
-                <button key={l} className={`chip ${active.start === s && active.end === e ? "on" : ""}`} onClick={() => onEdit({ label: `${l} ${year}`, start: s, end: e })}>{l}</button>))}</div>
-              <button className="qc-close-btn" onClick={() => { setOpen(false); onClose(); }}>Close quarter &amp; start next →</button>
+                <button key={l} className={`chip ${viewed.start === s && viewed.end === e ? "on" : ""}`} onClick={() => onEdit({ label: `${l} ${year}`, start: s, end: e })}>{l}</button>))}</div>
+              <button className="qc-close-btn" onClick={() => { setOpen(false); onClose(); }}>Close {viewed.label} &amp; move to next →</button>
             </>
           )}
         </div>
@@ -483,7 +537,7 @@ function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, 
 }
 
 /* ---------- master ---------- */
-function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
+function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [openNextQ, setOpenNextQ] = useState(false);
   return (
@@ -582,7 +636,7 @@ function TeamView({ team, onPick, onReset, readOnly, onCloseQuarter }) {
           );
         })()}
 
-        <ActivationWindow upcoming={team.upcoming} todayIso={team.todayIso} />
+        <ActivationWindow upcoming={team.upcoming} todayIso={team.todayIso} onOpen={onOpenDeal} />
 
         {team.movers.length > 0 && (
           <div className="tg-movers">
@@ -675,8 +729,16 @@ function NextQuarter({ rep, q, up }) {
 }
 
 /* ---------- rep ---------- */
-function RepView({ rep, q, up, onDelRep, readOnly }) {
+function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
   const [scenario, setScenario] = useState(null);
+  useEffect(() => {
+    if (!focus || !focus.id) return;
+    const t = setTimeout(() => {
+      const el = document.getElementById(`item-${focus.id}`);
+      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 2200); }
+    }, 80);
+    return () => clearTimeout(t);
+  }, [focus, rep.id]);
   const [showActivated, setShowActivated] = useState(false);
   const [showDoneLoans, setShowDoneLoans] = useState(false);
   const t = repTotals(rep, q);
@@ -1055,7 +1117,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
           const mk = monthKey(p.goLive);
           const monthLabel = mk != null ? `${MONTHS_SHORT[new Date(p.goLive + "T00:00:00").getMonth()]} ${new Date(p.goLive + "T00:00:00").getFullYear()}` : null;
           return (
-            <div className="prospect-item" key={p.id}>
+            <div id={`item-${p.id}`} className="prospect-item" key={p.id}>
               <div className="prospect-row">
                 <input className="line-name" placeholder="Prospect / opp name" value={p.name} onChange={(e) => onPatchProspect(p.id, { name: e.target.value })} />
                 <label className="inline-field">GPV<span className="dollar"><i>$</i><input inputMode="decimal" value={p.gpv} onChange={(e) => onPatchProspect(p.id, { gpv: e.target.value })} /></span></label>
@@ -1086,7 +1148,7 @@ function DealCard({ d, q, onPatch, onDel }) {
   const c = calcDeal(d, q), isFlat = d.model !== "costplus", activated = !!d.activated;
   const overdue = !activated && !!d.goLive && d.goLive < isoDate(new Date());
   return (
-    <div className={`deal ${activated ? "islive" : overdue ? "isoverdue" : "issigned"}`}>
+    <div id={`item-${d.id}`} className={`deal ${activated ? "islive" : overdue ? "isoverdue" : "issigned"}`}>
       {overdue && <div className="deal-overdue">⚠ Go-live date ({usDate(d.goLive)}) is in the past — update it below, or tick the deal live if it's activated.</div>}
       <div className="deal-header">
         <div className="deal-header-left">
@@ -1479,9 +1541,10 @@ function Style() {
   .qc-qrow.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
   .qc-qrow-meta{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-family:'Inter'}
   .qc-qrow-meta.current{color:var(--good)}
-  .qc-qrow.preview{border-style:dashed}
-  .qc-qrow.preview.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
-  .qc-qrow-meta.preview{color:var(--accent)}
+  .qc-qrow.open{border-style:dashed}
+  .qc-qrow.open:hover{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .qc-qrow-meta.open{color:var(--accent)}
+  .qc-qrow-meta.live{color:var(--good)}
   .qc-close-btn{width:100%;margin-top:12px;background:var(--ink);color:#fff;border:none;border-radius:9px;padding:10px;font-weight:600;font-size:12.5px;cursor:pointer;font-family:'Inter'}
   .qc-close-btn:hover{background:#000}
 
@@ -1635,5 +1698,12 @@ function Style() {
 
   .loan-goal-banner{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;background:var(--warn-soft);border:1px solid #EEDBBB;border-radius:11px;padding:12px 15px;margin-bottom:12px;font-size:13.5px}
   .loan-goal-banner .strong{font-weight:600}
+
+  .aw-row.clickable{cursor:pointer}
+  .aw-row.clickable:hover{border-color:var(--accent);background:var(--accent-soft)}
+  .aw-summary{display:flex;flex-wrap:wrap;gap:18px;align-items:center;background:#F7F9FC;border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--muted)}
+  .aw-summary b{color:var(--ink)} .aw-summary b.warn{color:var(--warn)} .aw-summary b.muted{color:var(--muted)}
+  @keyframes flashpulse{0%{box-shadow:0 0 0 0 rgba(47,110,207,.5)}60%{box-shadow:0 0 0 5px rgba(47,110,207,.12)}100%{box-shadow:0 0 0 0 rgba(47,110,207,0)}}
+  .flash{animation:flashpulse 1.1s ease-out 2;border-color:var(--accent) !important}
   `}</style>);
 }
