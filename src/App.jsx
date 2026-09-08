@@ -354,22 +354,27 @@ export default function App() {
 function ActivationWindow({ upcoming, todayIso, onOpen }) {
   const [range, setRange] = useState("month");
   const today = new Date(todayIso + "T00:00:00");
-  const addDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
   const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  // window end (inclusive) for each range
-  let end = null;
-  if (range === "week") end = iso(addDays(7));
-  else if (range === "nextweek") end = iso(addDays(14));
-  else if (range === "month") end = iso(new Date(today.getFullYear(), today.getMonth() + 1, 0));
-  const startOfNextWeek = iso(addDays(7));
+  const addDays = (base, n) => { const d = new Date(base); d.setDate(d.getDate() + n); return d; };
+  const daysFromMonday = (today.getDay() + 6) % 7; // Mon=0 … Sun=6
+  const monday = addDays(today, -daysFromMonday);
+  const sundayIso = iso(addDays(monday, 6));
+  const nextMondayIso = iso(addDays(monday, 7));
+  const nextSundayIso = iso(addDays(monday, 13));
+  const monthEndIso = iso(new Date(today.getFullYear(), today.getMonth() + 1, 0));
 
   const inRange = (u) => {
-    if (!u.goLive) return false;
-    if (u.overdue) return false; // overdue handled separately
+    if (!u.goLive || u.overdue) return false; // overdue handled separately
     if (range === "all") return u.goLive >= todayIso;
-    if (range === "nextweek") return u.goLive >= startOfNextWeek && u.goLive <= end;
-    return u.goLive >= todayIso && u.goLive <= end;
+    if (range === "week") return u.goLive >= todayIso && u.goLive <= sundayIso;      // to Sunday of this week
+    if (range === "nextweek") return u.goLive >= nextMondayIso && u.goLive <= nextSundayIso; // Mon–Sun next week
+    if (range === "month") return u.goLive >= todayIso && u.goLive <= monthEndIso;    // through month-end
+    return false;
   };
+  const rangeLabel = range === "week" ? `${usDate(iso(monday))} – ${usDate(sundayIso)}`
+    : range === "nextweek" ? `${usDate(nextMondayIso)} – ${usDate(nextSundayIso)}`
+    : range === "month" ? `through ${usDate(monthEndIso)}`
+    : "everything upcoming";
   const list = upcoming.filter(inRange);
   const overdue = upcoming.filter((u) => u.overdue);
   const tabs = [["week", "This week"], ["nextweek", "Next week"], ["month", "This month"], ["all", "All upcoming"]];
@@ -394,6 +399,7 @@ function ActivationWindow({ upcoming, todayIso, onOpen }) {
         <span><b className="mono">{money(totalGpv)}</b> total</span>
         <span><b className="mono">{money(avgGpv)}</b> avg</span>
         <span><b className="warn">{totalGpv ? pct(signedGpv / totalGpv, 0) : "0%"}</b> signed · <b className="muted">{totalGpv ? pct(prospectGpvS / totalGpv, 0) : "0%"}</b> prospect</span>
+        <span className="aw-range">{rangeLabel}</span>
       </div>
 
       {overdue.length > 0 && (
@@ -1703,6 +1709,7 @@ function Style() {
   .aw-row.clickable:hover{border-color:var(--accent);background:var(--accent-soft)}
   .aw-summary{display:flex;flex-wrap:wrap;gap:18px;align-items:center;background:#F7F9FC;border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--muted)}
   .aw-summary b{color:var(--ink)} .aw-summary b.warn{color:var(--warn)} .aw-summary b.muted{color:var(--muted)}
+  .aw-range{margin-left:auto;font-size:12px;color:var(--muted);font-family:'JetBrains Mono'}
   @keyframes flashpulse{0%{box-shadow:0 0 0 0 rgba(47,110,207,.5)}60%{box-shadow:0 0 0 5px rgba(47,110,207,.12)}100%{box-shadow:0 0 0 0 rgba(47,110,207,0)}}
   .flash{animation:flashpulse 1.1s ease-out 2;border-color:var(--accent) !important}
   `}</style>);
