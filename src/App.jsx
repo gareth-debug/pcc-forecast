@@ -751,6 +751,18 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
   const pendingDeals = (rep.deals || []).filter((d) => !d.activated);
   const activeDeals = (rep.deals || []).filter((d) => d.activated);
   const activeGpv = activeDeals.reduce((s, d) => s + num(d.gpv), 0);
+  const nowR = new Date();
+  const todayR = isoDate(nowR);
+  const curMonthKey = nowR.getFullYear() * 12 + nowR.getMonth();
+  const monthName = nowR.toLocaleString("en-US", { month: "long" });
+  const actDateOf = (d) => d.activatedAt || d.goLive || null;
+  const actDatesSorted = activeDeals.map(actDateOf).filter(Boolean).sort();
+  const lastAct = actDatesSorted.length ? actDatesSorted[actDatesSorted.length - 1] : null;
+  const daysSinceAct = lastAct ? Math.max(0, Math.floor((new Date(todayR + "T00:00:00") - new Date(lastAct + "T00:00:00")) / 86400000)) : null;
+  const monthActs = activeDeals.filter((d) => { const ad = actDateOf(d); return ad && (new Date(ad + "T00:00:00").getFullYear() * 12 + new Date(ad + "T00:00:00").getMonth()) === curMonthKey; });
+  const opsThisMonth = monthActs.length;
+  const gpvThisMonth = monthActs.reduce((s, d) => s + num(d.gpv), 0);
+  const OPS_GOAL = 5, GPV_MONTH_GOAL = 4000000;
   const pendingLoans = (rep.loans || []).filter((l) => !l.completed);
   const doneLoans = (rep.loans || []).filter((l) => l.completed);
   const doneLoansTotal = doneLoans.reduce((s, l) => s + num(l.revenue), 0);
@@ -806,6 +818,24 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
         <Kpi label="Banked now" value={money(t.banked)} tone="good" hint={`${pct(t.bankedAtt, 0)} of goal secured`} />
         <Kpi label="From loans" value={money(t.loans)} hint="loan revenue — inside pipeline" />
         <Kpi label={t.gap >= 0 ? "Still to find" : "Over goal by"} value={money(Math.abs(t.gap))} tone={t.gap <= 0 ? "good" : "warn"} />
+      </div>
+
+      <div className="act-strip">
+        <div className={`act-card ${daysSinceAct == null || daysSinceAct > 7 ? "bad" : "ok"}`}>
+          <span className="act-label">Days since last activation</span>
+          <span className="act-val">{daysSinceAct == null ? "—" : daysSinceAct}</span>
+          <span className="act-note">{daysSinceAct == null ? "no activations logged yet" : daysSinceAct > 7 ? "over 7 days — get something live" : "on track"}</span>
+        </div>
+        <div className={`act-card ${opsThisMonth >= OPS_GOAL ? "ok" : "warn"}`}>
+          <span className="act-label">Ops activated in {monthName}</span>
+          <span className="act-val">{opsThisMonth} <span className="act-goal">/ {OPS_GOAL}</span></span>
+          <span className="act-note">aiming for {OPS_GOAL} a month</span>
+        </div>
+        <div className={`act-card ${gpvThisMonth >= GPV_MONTH_GOAL ? "ok" : "warn"}`}>
+          <span className="act-label">GPV activated in {monthName}</span>
+          <span className="act-val">{money(gpvThisMonth)} <span className="act-goal">/ {money(GPV_MONTH_GOAL)}</span></span>
+          <span className="act-note">aiming for {money(GPV_MONTH_GOAL)} a month</span>
+        </div>
       </div>
 
       <div className="herobar">
@@ -883,7 +913,7 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
       <Section title="Signed deals — pending" sub="Enter each deal once with its GPV and go-live date — it flows automatically into your GPV totals and the monthly $4M bars below. Tick it live when it activates and it drops off here into the rolling number up top." onAdd={readOnly ? null : addDeal} addLabel="+ Add deal">
         {pendingDeals.length === 0 && <Empty>No pending signed deals. Add what you've signed — it auto-fills your path-to-goal below.</Empty>}
         {pendingDeals.map((d) => (
-          <DealCard key={d.id} d={d} q={q}
+          <DealCard key={d.id} d={d} q={q} repSurname={(rep.name || "").split(",")[0].trim()}
             onPatch={(p) => up((r) => Object.assign(r.deals.find((x) => x.id === d.id), p))}
             onDel={() => up((r) => (r.deals = r.deals.filter((x) => x.id !== d.id)))} />
         ))}
@@ -1151,7 +1181,7 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
   );
 }
 
-function DealCard({ d, q, onPatch, onDel }) {
+function DealCard({ d, q, onPatch, onDel, repSurname }) {
   const c = calcDeal(d, q), isFlat = d.model !== "costplus", activated = !!d.activated;
   const overdue = !activated && !!d.goLive && d.goLive < isoDate(new Date());
   return (
@@ -1173,7 +1203,7 @@ function DealCard({ d, q, onPatch, onDel }) {
       <div className="deal-controls">
         <button className={`nowlive-btn ${activated ? "on" : ""}`} onClick={() => {
           if (activated) { if (window.confirm("Move this deal back to pipeline (not yet live)?")) onPatch({ activated: false }); }
-          else { if (window.confirm(`Mark "${d.name || "this deal"}" activated? Its GPV moves to your live/actual total for its go-live month, and its revenue now comes from your closed-accounts total (not counted again here).`)) onPatch({ activated: true }); }
+          else { if (window.confirm(`Mark "${d.name || "this deal"}" activated? Its GPV moves to your live/actual total for its go-live month, and its revenue now comes from your closed-accounts total (not counted again here).`)) onPatch({ activated: true, activatedAt: isoDate(new Date()) }); }
         }}>
           <span className={`nowlive-box ${activated ? "checked" : ""}`}>{activated ? "✓" : ""}</span> {activated ? "Activated — click to undo" : "Tick once activated"}
         </button>
@@ -1187,6 +1217,10 @@ function DealCard({ d, q, onPatch, onDel }) {
         <Calc label="Eff. rate" v={pct(c.effRate, 3)} /><Calc label="Monthly" v={money(c.monthly)} />
         <Calc label="Months left" v={c.mr.toFixed(2)} /><Calc label={activated ? "Revenue" : "Quota credit"} v={activated ? "via closed-accts" : money(c.quotaCredit)} />
       </div>
+      <label className="deal-nextstep">
+        <span className="note-label">{repSurname ? `${repSurname}'s` : "Rep's"} next steps</span>
+        <input value={d.nextStep || ""} placeholder="what's the next step to progress this?" onChange={(e) => onPatch({ nextStep: e.target.value })} />
+      </label>
     </div>
   );
 }
@@ -1714,5 +1748,20 @@ function Style() {
   .aw-range{margin-left:auto;font-size:12px;color:var(--muted);font-family:'JetBrains Mono'}
   @keyframes flashpulse{0%{box-shadow:0 0 0 0 rgba(47,110,207,.5)}60%{box-shadow:0 0 0 5px rgba(47,110,207,.12)}100%{box-shadow:0 0 0 0 rgba(47,110,207,0)}}
   .flash{animation:flashpulse 1.1s ease-out 2;border-color:var(--accent) !important}
+
+  .act-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 18px}
+  .act-card{border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px;background:#fff}
+  .act-card.ok{background:var(--good-soft);border-color:#C7E4D6}
+  .act-card.warn{background:var(--warn-soft);border-color:#EEDBBB}
+  .act-card.bad{background:#FBECEA;border-color:#E7C3BE}
+  .act-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+  .act-val{font-size:26px;font-weight:600;font-family:'JetBrains Mono'}
+  .act-card.ok .act-val{color:var(--good)} .act-card.warn .act-val{color:var(--warn)} .act-card.bad .act-val{color:var(--danger)}
+  .act-goal{font-size:14px;color:var(--muted);font-weight:500}
+  .act-note{font-size:11.5px;color:var(--muted)}
+  @media(max-width:800px){ .act-strip{grid-template-columns:1fr} }
+
+  .deal-nextstep{display:flex;flex-direction:column;gap:4px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line2)}
+  .deal-nextstep input{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:'Inter';background:#FBFCFD;color:var(--ink)}
   `}</style>);
 }
