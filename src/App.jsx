@@ -210,11 +210,29 @@ export default function App() {
     let nextSigned = 0, nextLiveManual = 0, nextQuotaSum = 0;
     reps.forEach((r) => { const rr = nextQuarterRollin(r, q); nextSigned += rr.signed; nextLiveManual += num(r.nextLiveManual); nextQuotaSum += num(r.nextQuota); });
     const nqLabel = nextQuarter(q.end).label;
+    // team activation health
+    const nowT = new Date();
+    const todayT = isoDate(nowT);
+    const curMK = nowT.getFullYear() * 12 + nowT.getMonth();
+    const monthNameT = nowT.toLocaleString("en-US", { month: "long" });
+    const actDateOfT = (d) => d.activatedAt || d.goLive || null;
+    let teamOpsMonth = 0, teamGpvMonth = 0;
+    const daysList = [];
+    reps.forEach((r) => {
+      const acts = (r.deals || []).filter((d) => d.activated);
+      const ds = acts.map(actDateOfT).filter(Boolean).sort();
+      if (ds.length) { const last = ds[ds.length - 1]; daysList.push(Math.max(0, Math.floor((new Date(todayT + "T00:00:00") - new Date(last + "T00:00:00")) / 86400000))); }
+      acts.forEach((d) => { const ad = actDateOfT(d); if (ad && (new Date(ad + "T00:00:00").getFullYear() * 12 + new Date(ad + "T00:00:00").getMonth()) === curMK) { teamOpsMonth += 1; teamGpvMonth += num(d.gpv); } });
+    });
+    const avgDaysSince = daysList.length ? Math.round(daysList.reduce((s, x) => s + x, 0) / daysList.length) : null;
+    const opsGoalTeam = 5 * reps.length;
+    const gpvGoalTeam = 4000000 * reps.length;
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
       loansAll, loanGoal,
       teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length,
       upcoming, overdueCount, overdueGpv, overdueMonths, todayIso,
-      nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel };
+      nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel,
+      avgDaysSince, teamOpsMonth, teamGpvMonth, opsGoalTeam, gpvGoalTeam, monthNameT };
   }, [data, viewId]);
 
   const editQuarter = (nq) => update((d, cq) => { cq.label = nq.label; cq.start = nq.start; cq.end = nq.end; });
@@ -557,6 +575,25 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
         <Kpi label="Total forecast" value={money(team.total)} tone="accent" />
         <Kpi label="Attainment" value={pct(team.attainment)} tone={team.attainment >= 1 ? "good" : ""} />
       </div>
+
+      <div className="act-strip">
+        <div className={`act-card ${team.avgDaysSince == null || team.avgDaysSince > 7 ? "bad" : "ok"}`}>
+          <span className="act-label">Avg days since last activation</span>
+          <span className="act-val">{team.avgDaysSince == null ? "—" : team.avgDaysSince}</span>
+          <span className="act-note">{team.avgDaysSince == null ? "no activations logged yet" : team.avgDaysSince > 7 ? "team's gone quiet — over 7 days avg" : "team activating regularly"}</span>
+        </div>
+        <div className={`act-card ${team.teamOpsMonth >= team.opsGoalTeam ? "ok" : "warn"}`}>
+          <span className="act-label">Ops activated in {team.monthNameT}</span>
+          <span className="act-val">{team.teamOpsMonth} <span className="act-goal">/ {team.opsGoalTeam}</span></span>
+          <span className="act-note">team target ({team.repCount} reps × 5)</span>
+        </div>
+        <div className={`act-card ${team.teamGpvMonth >= team.gpvGoalTeam ? "ok" : "warn"}`}>
+          <span className="act-label">GPV activated in {team.monthNameT}</span>
+          <span className="act-val">{money(team.teamGpvMonth)} <span className="act-goal">/ {money(team.gpvGoalTeam)}</span></span>
+          <span className="act-note">team target ({team.repCount} reps × $4M)</span>
+        </div>
+      </div>
+
       <div className="tablecard">
         <div className="row head">
           <div className="c-rep">Rep</div><div className="c-num">Q3 goal</div><div className="c-num">Banked</div>
