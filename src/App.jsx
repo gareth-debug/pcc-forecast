@@ -218,11 +218,15 @@ export default function App() {
     const actDateOfT = (d) => d.activatedAt || d.goLive || null;
     let teamOpsMonth = 0, teamGpvMonth = 0;
     const daysList = [];
+    const actByRep = [];
     reps.forEach((r) => {
       const acts = (r.deals || []).filter((d) => d.activated);
       const ds = acts.map(actDateOfT).filter(Boolean).sort();
-      if (ds.length) { const last = ds[ds.length - 1]; daysList.push(Math.max(0, Math.floor((new Date(todayT + "T00:00:00") - new Date(last + "T00:00:00")) / 86400000))); }
-      acts.forEach((d) => { const ad = actDateOfT(d); if (ad && (new Date(ad + "T00:00:00").getFullYear() * 12 + new Date(ad + "T00:00:00").getMonth()) === curMK) { teamOpsMonth += 1; teamGpvMonth += num(d.gpv); } });
+      let repDays = null;
+      if (ds.length) { const last = ds[ds.length - 1]; repDays = Math.max(0, Math.floor((new Date(todayT + "T00:00:00") - new Date(last + "T00:00:00")) / 86400000)); daysList.push(repDays); }
+      let repOps = 0, repGpv = 0;
+      acts.forEach((d) => { const ad = actDateOfT(d); if (ad && (new Date(ad + "T00:00:00").getFullYear() * 12 + new Date(ad + "T00:00:00").getMonth()) === curMK) { teamOpsMonth += 1; teamGpvMonth += num(d.gpv); repOps += 1; repGpv += num(d.gpv); } });
+      actByRep.push({ id: r.id, name: r.name, repFirst: (r.name || "").split(",")[0], daysSince: repDays, opsMonth: repOps, gpvMonth: repGpv });
     });
     const avgDaysSince = daysList.length ? Math.round(daysList.reduce((s, x) => s + x, 0) / daysList.length) : null;
     const opsGoalTeam = 5 * reps.length;
@@ -232,7 +236,7 @@ export default function App() {
       teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length,
       upcoming, overdueCount, overdueGpv, overdueMonths, todayIso,
       nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel,
-      avgDaysSince, teamOpsMonth, teamGpvMonth, opsGoalTeam, gpvGoalTeam, monthNameT };
+      avgDaysSince, teamOpsMonth, teamGpvMonth, opsGoalTeam, gpvGoalTeam, monthNameT, actByRep };
   }, [data, viewId]);
 
   const editQuarter = (nq) => update((d, cq) => { cq.label = nq.label; cq.start = nq.start; cq.end = nq.end; });
@@ -564,6 +568,7 @@ function QuarterSwitcher({ quarters, activeId, viewId, onView, onEdit, onClose, 
 function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [openNextQ, setOpenNextQ] = useState(false);
+  const [showActRep, setShowActRep] = useState(false);
   return (
     <div className="view">
       <h1 className="view-title">Master view</h1>
@@ -576,7 +581,7 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
         <Kpi label="Attainment" value={pct(team.attainment)} tone={team.attainment >= 1 ? "good" : ""} />
       </div>
 
-      <div className="act-strip">
+      <div className="act-strip clickable" onClick={() => setShowActRep((s) => !s)} title="Click for the per-rep breakdown">
         <div className={`act-card ${team.avgDaysSince == null || team.avgDaysSince > 7 ? "bad" : "ok"}`}>
           <span className="act-label">Avg days since last activation</span>
           <span className="act-val">{team.avgDaysSince == null ? "—" : team.avgDaysSince}</span>
@@ -593,6 +598,23 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
           <span className="act-note">team target ({team.repCount} reps × $4M)</span>
         </div>
       </div>
+      <div className="act-hint" onClick={() => setShowActRep((s) => !s)}>{showActRep ? "▾ hide per-rep breakdown" : "▸ click for per-rep breakdown"}</div>
+
+      {showActRep && (
+        <div className="act-breakdown">
+          <div className="act-bd-row head">
+            <span>Rep</span><span>Days since last</span><span>Ops in {team.monthNameT}</span><span>GPV in {team.monthNameT}</span>
+          </div>
+          {[...team.actByRep].sort((a, b) => (b.daysSince == null ? 1e9 : b.daysSince) - (a.daysSince == null ? 1e9 : a.daysSince)).map((a) => (
+            <div className="act-bd-row" key={a.id} onClick={() => onPick(a.id)}>
+              <span className="act-bd-rep">{a.repFirst}</span>
+              <span className={`mono ${a.daysSince == null || a.daysSince > 7 ? "danger" : "good"}`}>{a.daysSince == null ? "—" : `${a.daysSince}d`}</span>
+              <span className={`mono ${a.opsMonth >= 5 ? "good" : "warn"}`}>{a.opsMonth} / 5</span>
+              <span className={`mono ${a.gpvMonth >= 4000000 ? "good" : "warn"}`}>{money(a.gpvMonth)} <span className="muted">/ $4M</span></span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="tablecard">
         <div className="row head">
@@ -1800,5 +1822,17 @@ function Style() {
 
   .deal-nextstep{display:flex;flex-direction:column;gap:4px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line2)}
   .deal-nextstep input{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:'Inter';background:#FBFCFD;color:var(--ink)}
+
+  .act-strip.clickable{cursor:pointer}
+  .act-strip.clickable:hover .act-card{border-color:var(--accent)}
+  .act-hint{font-size:12px;color:var(--accent);font-weight:600;cursor:pointer;margin:-8px 0 16px;font-family:'Inter'}
+  .act-breakdown{border:1px solid var(--line);border-radius:12px;padding:6px 16px 12px;margin:0 0 18px;background:#fff}
+  .act-bd-row{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.4fr;gap:14px;align-items:center;padding:9px 0;border-top:1px solid var(--line2);font-size:13.5px}
+  .act-bd-row:not(.head){cursor:pointer}
+  .act-bd-row:not(.head):hover{background:#F7F9FC}
+  .act-bd-row.head{border-top:none;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
+  .act-bd-rep{font-weight:600;font-family:'Space Grotesk'}
+  .act-bd-row .danger{color:var(--danger)} .act-bd-row .good{color:var(--good)} .act-bd-row .warn{color:var(--warn)}
+  .act-bd-row .muted{color:var(--muted);font-weight:500;font-size:11.5px}
   `}</style>);
 }
