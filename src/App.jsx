@@ -216,7 +216,7 @@ export default function App() {
     const curMK = nowT.getFullYear() * 12 + nowT.getMonth();
     const monthNameT = nowT.toLocaleString("en-US", { month: "long" });
     const actDateOfT = (d) => d.activatedAt || d.goLive || null;
-    let teamOpsMonth = 0, teamGpvMonth = 0;
+    let teamOpsMonth = 0, teamGpvMonth = 0, teamQuarterOps = 0, teamQuarterGpv = 0;
     const daysList = [];
     const actByRep = [];
     reps.forEach((r) => {
@@ -226,17 +226,22 @@ export default function App() {
       if (ds.length) { const last = ds[ds.length - 1]; repDays = Math.max(0, Math.floor((new Date(todayT + "T00:00:00") - new Date(last + "T00:00:00")) / 86400000)); daysList.push(repDays); }
       let repOps = 0, repGpv = 0;
       acts.forEach((d) => { const ad = actDateOfT(d); if (ad && (new Date(ad + "T00:00:00").getFullYear() * 12 + new Date(ad + "T00:00:00").getMonth()) === curMK) { teamOpsMonth += 1; teamGpvMonth += num(d.gpv); repOps += 1; repGpv += num(d.gpv); } });
-      actByRep.push({ id: r.id, name: r.name, repFirst: (r.name || "").split(",")[0], daysSince: repDays, opsMonth: repOps, gpvMonth: repGpv });
+      const repQOps = acts.length, repQGpv = acts.reduce((s, d) => s + num(d.gpv), 0);
+      teamQuarterOps += repQOps; teamQuarterGpv += repQGpv;
+      actByRep.push({ id: r.id, name: r.name, repFirst: (r.name || "").split(",")[0], daysSince: repDays, opsMonth: repOps, gpvMonth: repGpv, quarterOps: repQOps, quarterGpv: repQGpv });
     });
     const avgDaysSince = daysList.length ? Math.round(daysList.reduce((s, x) => s + x, 0) / daysList.length) : null;
     const opsGoalTeam = 5 * reps.length;
     const gpvGoalTeam = 4000000 * reps.length;
+    const opsQGoalTeam = 15 * reps.length;
+    const gpvQGoalTeam = 12000000 * reps.length;
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
       loansAll, loanGoal,
       teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length,
       upcoming, overdueCount, overdueGpv, overdueMonths, todayIso,
       nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel,
-      avgDaysSince, teamOpsMonth, teamGpvMonth, opsGoalTeam, gpvGoalTeam, monthNameT, actByRep };
+      avgDaysSince, teamOpsMonth, teamGpvMonth, opsGoalTeam, gpvGoalTeam, monthNameT, actByRep,
+      teamQuarterOps, teamQuarterGpv, opsQGoalTeam, gpvQGoalTeam };
   }, [data, viewId]);
 
   const editQuarter = (nq) => update((d, cq) => { cq.label = nq.label; cq.start = nq.start; cq.end = nq.end; });
@@ -598,19 +603,27 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
           <span className="act-note">team target ({team.repCount} reps × $4M)</span>
         </div>
       </div>
+      <div className="act-quarter">
+        <span className="act-q-tag">This quarter</span>
+        <span className={team.teamQuarterOps >= team.opsQGoalTeam ? "good" : "warn"}>{team.teamQuarterOps} / {team.opsQGoalTeam} ops</span>
+        <span className="act-q-sep">·</span>
+        <span className={team.teamQuarterGpv >= team.gpvQGoalTeam ? "good" : "warn"}>{money(team.teamQuarterGpv)} / {money(team.gpvQGoalTeam)} GPV</span>
+      </div>
       <div className="act-hint" onClick={() => setShowActRep((s) => !s)}>{showActRep ? "▾ hide per-rep breakdown" : "▸ click for per-rep breakdown"}</div>
 
       {showActRep && (
         <div className="act-breakdown">
           <div className="act-bd-row head">
-            <span>Rep</span><span>Days since last</span><span>Ops in {team.monthNameT}</span><span>GPV in {team.monthNameT}</span>
+            <span>Rep</span><span>Days since</span><span>Ops {team.monthNameT}</span><span>GPV {team.monthNameT}</span><span>Ops (qtr)</span><span>GPV (qtr)</span>
           </div>
           {[...team.actByRep].sort((a, b) => (b.daysSince == null ? 1e9 : b.daysSince) - (a.daysSince == null ? 1e9 : a.daysSince)).map((a) => (
             <div className="act-bd-row" key={a.id} onClick={() => onPick(a.id)}>
               <span className="act-bd-rep">{a.repFirst}</span>
               <span className={`mono ${a.daysSince == null || a.daysSince > 7 ? "danger" : "good"}`}>{a.daysSince == null ? "—" : `${a.daysSince}d`}</span>
               <span className={`mono ${a.opsMonth >= 5 ? "good" : "warn"}`}>{a.opsMonth} / 5</span>
-              <span className={`mono ${a.gpvMonth >= 4000000 ? "good" : "warn"}`}>{money(a.gpvMonth)} <span className="muted">/ $4M</span></span>
+              <span className={`mono ${a.gpvMonth >= 4000000 ? "good" : "warn"}`}>{money(a.gpvMonth)}</span>
+              <span className={`mono ${a.quarterOps >= 15 ? "good" : "warn"}`}>{a.quarterOps} / 15</span>
+              <span className={`mono ${a.quarterGpv >= 12000000 ? "good" : "warn"}`}>{money(a.quarterGpv)}</span>
             </div>
           ))}
         </div>
@@ -895,6 +908,12 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
           <span className="act-val">{money(gpvThisMonth)} <span className="act-goal">/ {money(GPV_MONTH_GOAL)}</span></span>
           <span className="act-note">aiming for {money(GPV_MONTH_GOAL)} a month</span>
         </div>
+      </div>
+      <div className="act-quarter">
+        <span className="act-q-tag">This quarter</span>
+        <span className={activeDeals.length >= OPS_GOAL * 3 ? "good" : "warn"}>{activeDeals.length} / {OPS_GOAL * 3} ops</span>
+        <span className="act-q-sep">·</span>
+        <span className={activeGpv >= GPV_MONTH_GOAL * 3 ? "good" : "warn"}>{money(activeGpv)} / {money(GPV_MONTH_GOAL * 3)} GPV</span>
       </div>
 
       <div className="herobar">
@@ -1827,12 +1846,17 @@ function Style() {
   .act-strip.clickable:hover .act-card{border-color:var(--accent)}
   .act-hint{font-size:12px;color:var(--accent);font-weight:600;cursor:pointer;margin:-8px 0 16px;font-family:'Inter'}
   .act-breakdown{border:1px solid var(--line);border-radius:12px;padding:6px 16px 12px;margin:0 0 18px;background:#fff}
-  .act-bd-row{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.4fr;gap:14px;align-items:center;padding:9px 0;border-top:1px solid var(--line2);font-size:13.5px}
+  .act-bd-row{display:grid;grid-template-columns:1.2fr .8fr .9fr 1fr .9fr 1fr;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line2);font-size:13px}
   .act-bd-row:not(.head){cursor:pointer}
   .act-bd-row:not(.head):hover{background:#F7F9FC}
   .act-bd-row.head{border-top:none;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
   .act-bd-rep{font-weight:600;font-family:'Space Grotesk'}
   .act-bd-row .danger{color:var(--danger)} .act-bd-row .good{color:var(--good)} .act-bd-row .warn{color:var(--warn)}
   .act-bd-row .muted{color:var(--muted);font-weight:500;font-size:11.5px}
+
+  .act-quarter{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin:-6px 0 16px;padding:0 2px}
+  .act-quarter .act-q-tag{font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:10.5px;color:var(--muted)}
+  .act-quarter .good{color:var(--good);font-weight:600} .act-quarter .warn{color:var(--warn);font-weight:600}
+  .act-quarter .act-q-sep{color:var(--line)}
   `}</style>);
 }
