@@ -230,7 +230,8 @@ export default function App() {
       acts.forEach((d) => { const ad = actDateOfT(d); if (ad && (new Date(ad + "T00:00:00").getFullYear() * 12 + new Date(ad + "T00:00:00").getMonth()) === curMK) { teamOpsMonth += 1; teamGpvMonth += num(d.gpv); repOps += 1; repGpv += num(d.gpv); } });
       const repQOps = acts.length, repQGpv = acts.reduce((s, d) => s + num(d.gpv), 0);
       teamQuarterOps += repQOps; teamQuarterGpv += repQGpv;
-      actByRep.push({ id: r.id, name: r.name, repFirst: (r.name || "").split(",")[0], daysSince: repDays, opsMonth: repOps, gpvMonth: repGpv, quarterOps: repQOps, quarterGpv: repQGpv });
+      const rLoans = (r.loans || []).reduce((s, l) => s + num(l.revenue), 0); const rLoanGoal = num(r.quota) * 0.1;
+      actByRep.push({ id: r.id, name: r.name, repFirst: (r.name || "").split(",")[0], daysSince: repDays, opsMonth: repOps, gpvMonth: repGpv, quarterOps: repQOps, quarterGpv: repQGpv, loansAll: rLoans, loanGoal: rLoanGoal });
     });
     const avgDaysSince = daysList.length ? Math.round(daysList.reduce((s, x) => s + x, 0) / daysList.length) : null;
     const opsGoalTeam = 5 * inReps.length;
@@ -604,6 +605,11 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
           <span className="act-val">{money(team.teamGpvMonth)} <span className="act-goal">/ {money(team.gpvGoalTeam)}</span></span>
           <span className="act-note">team target ({team.repCount} reps × $4M)</span>
         </div>
+        <div className={`act-card ${team.loanGoal && team.loansAll >= team.loanGoal ? "ok" : "warn"}`}>
+          <span className="act-label">Loans sold</span>
+          <span className="act-val">{money(team.loansAll)} <span className="act-goal">/ {money(team.loanGoal)}</span></span>
+          <span className="act-note">10% of quota target · {team.loanGoal ? pct(team.loansAll / team.loanGoal, 0) : "0%"}</span>
+        </div>
       </div>
       <div className="act-quarter">
         <span className="act-q-tag">This quarter</span>
@@ -616,7 +622,7 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
       {showActRep && (
         <div className="act-breakdown">
           <div className="act-bd-row head">
-            <span>Rep</span><span>Days since</span><span>Ops {team.monthNameT}</span><span>GPV {team.monthNameT}</span><span>Ops (qtr)</span><span>GPV (qtr)</span>
+            <span>Rep</span><span>Days since</span><span>Ops {team.monthNameT}</span><span>GPV {team.monthNameT}</span><span>Ops (qtr)</span><span>GPV (qtr)</span><span>Loans (10%)</span>
           </div>
           {[...team.actByRep].sort((a, b) => (b.daysSince == null ? 1e9 : b.daysSince) - (a.daysSince == null ? 1e9 : a.daysSince)).map((a) => (
             <div className="act-bd-row" key={a.id} onClick={() => onPick(a.id)}>
@@ -626,6 +632,7 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
               <span className={`mono ${a.gpvMonth >= 4000000 ? "good" : "warn"}`}>{money(a.gpvMonth)}</span>
               <span className={`mono ${a.quarterOps >= 15 ? "good" : "warn"}`}>{a.quarterOps} / 15</span>
               <span className={`mono ${a.quarterGpv >= 12000000 ? "good" : "warn"}`}>{money(a.quarterGpv)}</span>
+              <span className={`mono ${a.loanGoal && a.loansAll >= a.loanGoal ? "good" : "warn"}`}>{money(a.loansAll)} <span className="muted">/ {money(a.loanGoal)}</span></span>
             </div>
           ))}
         </div>
@@ -910,6 +917,11 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
           <span className="act-label">GPV activated in {monthName}</span>
           <span className="act-val">{money(gpvThisMonth)} <span className="act-goal">/ {money(GPV_MONTH_GOAL)}</span></span>
           <span className="act-note">aiming for {money(GPV_MONTH_GOAL)} a month</span>
+        </div>
+        <div className={`act-card ${loanActual >= loanGoal ? "ok" : "warn"}`}>
+          <span className="act-label">Loans sold</span>
+          <span className="act-val">{money(loanActual)} <span className="act-goal">/ {money(loanGoal)}</span></span>
+          <span className="act-note">10% of quota target · {pct(loanPct, 0)}</span>
         </div>
       </div>
       <div className="act-quarter">
@@ -1830,7 +1842,8 @@ function Style() {
   @keyframes flashpulse{0%{box-shadow:0 0 0 0 rgba(47,110,207,.5)}60%{box-shadow:0 0 0 5px rgba(47,110,207,.12)}100%{box-shadow:0 0 0 0 rgba(47,110,207,0)}}
   .flash{animation:flashpulse 1.1s ease-out 2;border-color:var(--accent) !important}
 
-  .act-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 18px}
+  .act-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:0 0 18px}
+  @media(max-width:900px){ .act-strip{grid-template-columns:repeat(2,1fr)} }
   .act-card{border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px;background:#fff}
   .act-card.ok{background:var(--good-soft);border-color:#C7E4D6}
   .act-card.warn{background:var(--warn-soft);border-color:#EEDBBB}
@@ -1849,7 +1862,7 @@ function Style() {
   .act-strip.clickable:hover .act-card{border-color:var(--accent)}
   .act-hint{font-size:12px;color:var(--accent);font-weight:600;cursor:pointer;margin:-8px 0 16px;font-family:'Inter'}
   .act-breakdown{border:1px solid var(--line);border-radius:12px;padding:6px 16px 12px;margin:0 0 18px;background:#fff}
-  .act-bd-row{display:grid;grid-template-columns:1.2fr .8fr .9fr 1fr .9fr 1fr;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line2);font-size:13px}
+  .act-bd-row{display:grid;grid-template-columns:1.1fr .7fr .8fr .9fr .8fr .9fr 1.1fr;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--line2);font-size:12.5px}
   .act-bd-row:not(.head){cursor:pointer}
   .act-bd-row:not(.head):hover{background:#F7F9FC}
   .act-bd-row.head{border-top:none;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
