@@ -173,19 +173,21 @@ export default function App() {
 
   const team = useMemo(() => {
     if (!data || !viewedQ) return null;
-    const rows = reps.map((r) => ({ rep: r, t: repTotals(r, q) }));
-    const sum = (k) => rows.reduce((s, x) => s + x.t[k], 0);
+    const inReps = reps.filter((r) => !r.excluded);
+    const rows = reps.map((r) => ({ rep: r, t: repTotals(r, q), excluded: !!r.excluded }));
+    const active = rows.filter((x) => !x.excluded);
+    const sum = (k) => active.reduce((s, x) => s + x.t[k], 0);
     const quota = sum("quota"), banked = sum("banked"), pipeline = sum("pipeline"), total = banked + pipeline;
     const loansAll = sum("loansAll"), loanGoal = sum("loanGoal");
     const MONTH_TARGET = 4000000;
-    const teamTarget = MONTH_TARGET * reps.length;
+    const teamTarget = MONTH_TARGET * inReps.length;
     const months = quarterMonths(q.start, q.end);
     const todayIsoM = isoDate(new Date());
     const monthData = months.map((m) => {
       const key = m.getFullYear() * 12 + m.getMonth();
       let prospect = 0, signed = 0, live = 0, overdue = 0;
       const dealList = [];
-      reps.forEach((r) => {
+      inReps.forEach((r) => {
         const first = (r.name || "").split(",")[0];
         (r.deals || []).forEach((d) => { if (monthKey(d.goLive) === key) { const g = num(d.gpv); let kind; if (d.activated) { live += g; kind = "active"; } else if (d.goLive < todayIsoM) { overdue += g; kind = "overdue"; } else { signed += g; kind = "signed"; } dealList.push({ name: d.name || "Untitled", rep: first, gpv: g, goLive: d.goLive, kind }); } });
         (r.prospects || []).forEach((p) => { if (monthKey(p.goLive) === key) { const g = num(p.gpv); let kind; if (p.goLive && p.goLive < todayIsoM) { overdue += g; kind = "overdue"; } else { prospect += g; kind = "prospect"; } dealList.push({ name: p.name || "Prospect", rep: first, gpv: g, goLive: p.goLive, kind }); } });
@@ -196,7 +198,7 @@ export default function App() {
     // unified upcoming list: every not-yet-live deal (signed) + prospect, with overdue flag
     const todayIso = isoDate(new Date());
     const upcoming = [];
-    reps.forEach((r) => {
+    inReps.forEach((r) => {
       (r.deals || []).forEach((d) => { if (!d.activated && num(d.gpv) > 0) upcoming.push({ name: d.name || "Untitled", rep: r.name, repFirst: (r.name || "").split(",")[0], repId: r.id, itemId: d.id, gpv: num(d.gpv), goLive: d.goLive, kind: "signed", overdue: !!(d.goLive && d.goLive < todayIso) }); });
       (r.prospects || []).forEach((p) => { if (num(p.gpv) > 0) upcoming.push({ name: p.name || "Prospect", rep: r.name, repFirst: (r.name || "").split(",")[0], repId: r.id, itemId: p.id, gpv: num(p.gpv), goLive: p.goLive, kind: "prospect", overdue: !!(p.goLive && p.goLive < todayIso) }); });
     });
@@ -208,18 +210,18 @@ export default function App() {
     upcoming.forEach((u) => { if (u.overdue) { const k = monthKey(u.goLive); if (k != null) overdueMonths[k] = true; } });
     const movers = [...upcoming].sort((a, b) => b.gpv - a.gpv);
     let nextSigned = 0, nextLiveManual = 0, nextQuotaSum = 0;
-    reps.forEach((r) => { const rr = nextQuarterRollin(r, q); nextSigned += rr.signed; nextLiveManual += num(r.nextLiveManual); nextQuotaSum += num(r.nextQuota); });
+    inReps.forEach((r) => { const rr = nextQuarterRollin(r, q); nextSigned += rr.signed; nextLiveManual += num(r.nextLiveManual); nextQuotaSum += num(r.nextQuota); });
     const nqLabel = nextQuarter(q.end).label;
     // team activation health
     const nowT = new Date();
     const todayT = isoDate(nowT);
     const curMK = nowT.getFullYear() * 12 + nowT.getMonth();
     const monthNameT = nowT.toLocaleString("en-US", { month: "long" });
-    const actDateOfT = (d) => d.activatedAt || d.goLive || null;
+    const actDateOfT = (d) => d.goLive || null; // activation date = go-live (backdated to when it actually went live)
     let teamOpsMonth = 0, teamGpvMonth = 0, teamQuarterOps = 0, teamQuarterGpv = 0;
     const daysList = [];
     const actByRep = [];
-    reps.forEach((r) => {
+    inReps.forEach((r) => {
       const acts = (r.deals || []).filter((d) => d.activated);
       const ds = acts.map(actDateOfT).filter(Boolean).sort();
       let repDays = null;
@@ -231,13 +233,13 @@ export default function App() {
       actByRep.push({ id: r.id, name: r.name, repFirst: (r.name || "").split(",")[0], daysSince: repDays, opsMonth: repOps, gpvMonth: repGpv, quarterOps: repQOps, quarterGpv: repQGpv });
     });
     const avgDaysSince = daysList.length ? Math.round(daysList.reduce((s, x) => s + x, 0) / daysList.length) : null;
-    const opsGoalTeam = 5 * reps.length;
-    const gpvGoalTeam = 4000000 * reps.length;
-    const opsQGoalTeam = 15 * reps.length;
-    const gpvQGoalTeam = 12000000 * reps.length;
+    const opsGoalTeam = 5 * inReps.length;
+    const gpvGoalTeam = 4000000 * inReps.length;
+    const opsQGoalTeam = 15 * inReps.length;
+    const gpvQGoalTeam = 12000000 * inReps.length;
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
       loansAll, loanGoal,
-      teamTarget, monthData, movers: movers.slice(0, 6), repCount: reps.length,
+      teamTarget, monthData, movers: movers.slice(0, 6), repCount: inReps.length,
       upcoming, overdueCount, overdueGpv, overdueMonths, todayIso,
       nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel,
       avgDaysSince, teamOpsMonth, teamGpvMonth, opsGoalTeam, gpvGoalTeam, monthNameT, actByRep,
@@ -634,9 +636,9 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
           <div className="c-rep">Rep</div><div className="c-num">Q3 goal</div><div className="c-num">Banked</div>
           <div className="c-num">Pipeline</div><div className="c-num">Forecast</div><div className="c-num">Loans</div><div className="c-num">Att.</div><div className="c-bar">Progress to goal</div>
         </div>
-        {[...team.rows].sort((a, b) => b.t.attainment - a.t.attainment).map(({ rep, t }) => (
-          <div className="row" key={rep.id} onClick={() => onPick(rep.id)}>
-            <div className="c-rep"><span className="r-name">{rep.name}</span>{rep.code && <span className="r-code">{rep.code}</span>}</div>
+        {[...team.rows].sort((a, b) => (a.excluded === b.excluded ? b.t.attainment - a.t.attainment : a.excluded ? 1 : -1)).map(({ rep, t, excluded }) => (
+          <div className={`row ${excluded ? "excluded" : ""}`} key={rep.id} onClick={() => onPick(rep.id)}>
+            <div className="c-rep"><span className="r-name">{rep.name}</span>{excluded ? <span className="r-leaving">leaving · not in totals</span> : rep.code && <span className="r-code">{rep.code}</span>}</div>
             <div className="c-num mono">{money(t.quota)}</div><div className="c-num mono good">{money(t.banked)}<span className="cell-sub">({pct(t.bankedAtt, 0)})</span></div>
             <div className="c-num mono warn">{money(t.pipeline)}<span className="cell-sub">({t.quota ? pct(t.pipeline / t.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(t.total)}</div>
             <div className="c-num mono">{money(t.loansAll)}<span className={`cell-sub ${t.loanGoal && t.loansAll >= t.loanGoal ? "good" : ""}`}>({t.loanGoal ? pct(t.loansAll / t.loanGoal, 0) : "0%"})</span></div>
@@ -827,7 +829,7 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
   const todayR = isoDate(nowR);
   const curMonthKey = nowR.getFullYear() * 12 + nowR.getMonth();
   const monthName = nowR.toLocaleString("en-US", { month: "long" });
-  const actDateOf = (d) => d.activatedAt || d.goLive || null;
+  const actDateOf = (d) => d.goLive || null; // activation date = go-live (backdated to when it actually went live)
   const actDatesSorted = activeDeals.map(actDateOf).filter(Boolean).sort();
   const lastAct = actDatesSorted.length ? actDatesSorted[actDatesSorted.length - 1] : null;
   const daysSinceAct = lastAct ? Math.max(0, Math.floor((new Date(todayR + "T00:00:00") - new Date(lastAct + "T00:00:00")) / 86400000)) : null;
@@ -884,6 +886,7 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
         )}
       </div>
 
+      {rep.excluded && <div className="leaving-banner">Marked as <b>leaving</b> — excluded from all {q.label} team totals on Master. Their tab, deals and numbers stay here; only the team rollup leaves them out.</div>}
       <div className="kpi-row five">
         <Kpi label="Total forecast" value={money(t.total)} tone="accent" />
         <Kpi label="Attainment" value={pct(t.attainment)} tone={t.attainment >= 1 ? "good" : ""} />
@@ -1052,7 +1055,7 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
 
       <NextQuarter rep={rep} q={q} up={up} />
 
-      {!readOnly && <div className="rep-foot"><button className="ghost sm danger" onClick={onDelRep}>Remove rep</button></div>}
+      {!readOnly && <div className="rep-foot"><button className="ghost sm" onClick={() => up((r) => (r.excluded = !r.excluded))}>{rep.excluded ? "Include in team totals" : "Mark as leaving (exclude from team totals)"}</button><button className="ghost sm danger" onClick={onDelRep}>Remove rep</button></div>}
     </div>
   );
 }
@@ -1858,5 +1861,9 @@ function Style() {
   .act-quarter .act-q-tag{font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:10.5px;color:var(--muted)}
   .act-quarter .good{color:var(--good);font-weight:600} .act-quarter .warn{color:var(--warn);font-weight:600}
   .act-quarter .act-q-sep{color:var(--line)}
+
+  .row.excluded{opacity:.5}
+  .r-leaving{display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--danger);background:#FBECEA;border-radius:20px;padding:1px 8px;margin-left:2px}
+  .leaving-banner{background:#FBECEA;border:1px solid #E7C3BE;color:var(--danger);border-radius:11px;padding:11px 15px;margin-bottom:14px;font-size:13px}
   `}</style>);
 }
