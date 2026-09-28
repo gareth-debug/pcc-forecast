@@ -203,6 +203,10 @@ export default function App() {
       (r.prospects || []).forEach((p) => { if (num(p.gpv) > 0) upcoming.push({ name: p.name || "Prospect", rep: r.name, repFirst: (r.name || "").split(",")[0], repId: r.id, itemId: p.id, gpv: num(p.gpv), goLive: p.goLive, kind: "prospect", overdue: !!(p.goLive && p.goLive < todayIso) }); });
     });
     upcoming.sort((a, b) => (a.goLive || "9999") < (b.goLive || "9999") ? -1 : 1);
+    const activatedList = [];
+    inReps.forEach((r) => {
+      (r.deals || []).forEach((d) => { if (d.activated && num(d.gpv) > 0) activatedList.push({ name: d.name || "Untitled", rep: r.name, repFirst: (r.name || "").split(",")[0], repId: r.id, itemId: d.id, gpv: num(d.gpv), goLive: d.goLive }); });
+    });
     const overdueCount = upcoming.filter((u) => u.overdue).length;
     const overdueGpv = upcoming.filter((u) => u.overdue).reduce((s, u) => s + u.gpv, 0);
     // mark which quarter-months contain an overdue deal (for the red bar marker)
@@ -241,7 +245,7 @@ export default function App() {
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
       loansAll, loanGoal,
       teamTarget, monthData, movers: movers.slice(0, 6), repCount: inReps.length,
-      upcoming, overdueCount, overdueGpv, overdueMonths, todayIso,
+      upcoming, activatedList, qStart: q.start, qEnd: q.end, overdueCount, overdueGpv, overdueMonths, todayIso,
       nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel,
       avgDaysSince, teamOpsMonth, teamGpvMonth, opsGoalTeam, gpvGoalTeam, monthNameT, actByRep,
       teamQuarterOps, teamQuarterGpv, opsQGoalTeam, gpvQGoalTeam };
@@ -376,6 +380,55 @@ export default function App() {
         )}
       </div>
       <div className="foot-note">One shared team sheet — everyone with this link edits the same data. Reps work their own tab; you see all of it in Master.</div>
+    </div>
+  );
+}
+
+/* ---------- activated window (deals gone live, by go-live date) ---------- */
+function ActivatedWindow({ activated, qStart, qEnd, onOpen }) {
+  const [range, setRange] = useState("thisweek");
+  const today = new Date();
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const addDays = (base, n) => { const d = new Date(base); d.setDate(d.getDate() + n); return d; };
+  const dow = (today.getDay() + 6) % 7;
+  const monday = addDays(today, -dow);
+  const y = today.getFullYear(), m = today.getMonth();
+  const wins = {
+    thisweek: [iso(monday), iso(addDays(monday, 6)), "This week"],
+    lastweek: [iso(addDays(monday, -7)), iso(addDays(monday, -1)), "Last week"],
+    thismonth: [iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0)), "This month"],
+    lastmonth: [iso(new Date(y, m - 1, 1)), iso(new Date(y, m, 0)), "Last month"],
+    quarter: [qStart, qEnd, "This quarter"],
+  };
+  const [s, e, lbl] = wins[range];
+  const list = activated.filter((a) => a.goLive && a.goLive >= s && a.goLive <= e).sort((a, b) => (a.goLive < b.goLive ? 1 : -1));
+  const total = list.reduce((x, u) => x + u.gpv, 0);
+  const avg = list.length ? total / list.length : 0;
+  const tabs = [["thisweek", "This week"], ["lastweek", "Last week"], ["thismonth", "This month"], ["lastmonth", "Last month"], ["quarter", "Quarter"]];
+  return (
+    <div className="aw">
+      <div className="aw-head">
+        <div className="pg-sub-head">Deals activated <span className="muted" style={{ fontWeight: 500 }}>(gone live, by go-live date)</span></div>
+        <div className="aw-tabs">
+          {tabs.map(([k, t]) => (<button key={k} className={`aw-tab ${range === k ? "on" : ""}`} onClick={() => setRange(k)}>{t}</button>))}
+        </div>
+      </div>
+      <div className="aw-summary">
+        <span><b>{list.length}</b> activated</span>
+        <span><b className="mono good">{money(total)}</b> GPV</span>
+        <span><b className="mono">{money(avg)}</b> avg</span>
+        <span className="aw-range">{lbl} · {usDate(s)} – {usDate(e)}</span>
+      </div>
+      {list.length === 0 ? (
+        <div className="aw-empty">Nothing went live in this window.</div>
+      ) : list.map((u, i) => (
+        <div className="aw-row clickable" key={i} onClick={() => onOpen && onOpen(u.repId, u.itemId)} title="Open this deal">
+          <span className="aw-name">{u.name} <span className="aw-kind active">live</span></span>
+          <span className="aw-rep">{u.repFirst}</span>
+          <span className="aw-date">{usDate(u.goLive)}</span>
+          <span className="aw-gpv mono good">{money(u.gpv)}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -724,6 +777,8 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
         })()}
 
         <ActivationWindow upcoming={team.upcoming} todayIso={team.todayIso} onOpen={onOpenDeal} />
+
+        <ActivatedWindow activated={team.activatedList} qStart={team.qStart} qEnd={team.qEnd} onOpen={onOpenDeal} />
 
         {team.movers.length > 0 && (
           <div className="tg-movers">
@@ -1710,7 +1765,7 @@ function Style() {
   .aw-row.overdue{border-color:#E7C3BE;background:#FCF3F1}
   .aw-name{font-weight:600;font-family:'Space Grotesk';font-size:14px}
   .aw-kind{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px;margin-left:6px}
-  .aw-kind.signed{background:var(--warn-soft);color:var(--warn)} .aw-kind.prospect{background:var(--accent-soft);color:var(--accent)}
+  .aw-kind.signed{background:var(--warn-soft);color:var(--warn)} .aw-kind.prospect{background:var(--accent-soft);color:var(--accent)} .aw-kind.active{background:var(--good-soft);color:var(--good)}
   .aw-rep{font-size:12.5px;color:var(--muted);font-weight:600}
   .aw-date{font-family:'JetBrains Mono';font-size:12.5px;color:var(--ink)}
   .aw-row.overdue .aw-date{color:var(--danger);font-weight:600}
