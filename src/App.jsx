@@ -207,6 +207,13 @@ export default function App() {
     inReps.forEach((r) => {
       (r.deals || []).forEach((d) => { if (d.activated && num(d.gpv) > 0) activatedList.push({ name: d.name || "Untitled", rep: r.name, repFirst: (r.name || "").split(",")[0], repId: r.id, itemId: d.id, gpv: num(d.gpv), goLive: d.goLive }); });
     });
+    const holding = inReps.map((r) => ({
+      id: r.id, repFirst: (r.name || "").split(",")[0],
+      prospectGpv: (r.prospects || []).reduce((s, p) => s + num(p.gpv), 0),
+      waitingGpv: (r.deals || []).filter((d) => !d.activated).reduce((s, d) => s + num(d.gpv), 0),
+    })).sort((a, b) => (b.prospectGpv + b.waitingGpv) - (a.prospectGpv + a.waitingGpv));
+    const holdingProspect = holding.reduce((s, h) => s + h.prospectGpv, 0);
+    const holdingWaiting = holding.reduce((s, h) => s + h.waitingGpv, 0);
     const overdueCount = upcoming.filter((u) => u.overdue).length;
     const overdueGpv = upcoming.filter((u) => u.overdue).reduce((s, u) => s + u.gpv, 0);
     // mark which quarter-months contain an overdue deal (for the red bar marker)
@@ -245,7 +252,7 @@ export default function App() {
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
       loansAll, loanGoal,
       teamTarget, monthData, movers: movers.slice(0, 6), repCount: inReps.length,
-      upcoming, activatedList, qStart: q.start, qEnd: q.end, overdueCount, overdueGpv, overdueMonths, todayIso,
+      upcoming, activatedList, holding, holdingProspect, holdingWaiting, qStart: q.start, qEnd: q.end, overdueCount, overdueGpv, overdueMonths, todayIso,
       nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel,
       avgDaysSince, teamOpsMonth, teamGpvMonth, opsGoalTeam, gpvGoalTeam, monthNameT, actByRep,
       teamQuarterOps, teamQuarterGpv, opsQGoalTeam, gpvQGoalTeam };
@@ -779,6 +786,19 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
         <ActivationWindow upcoming={team.upcoming} todayIso={team.todayIso} onOpen={onOpenDeal} />
 
         <ActivatedWindow activated={team.activatedList} qStart={team.qStart} qEnd={team.qEnd} onOpen={onOpenDeal} />
+
+        <div className="holding-card">
+          <div className="pg-sub-head">What each rep is holding <span className="muted" style={{ fontWeight: 500 }}>(all GPV in play, incl. go-lives outside this quarter)</span></div>
+          <div className="hold-row head"><span>Rep</span><span>Prospect GPV</span><span>Waiting to activate</span></div>
+          {team.holding.map((h) => (
+            <div className="hold-row" key={h.id} onClick={() => onPick(h.id)}>
+              <span className="hold-rep">{h.repFirst}</span>
+              <span className="mono">{money(h.prospectGpv)}</span>
+              <span className="mono">{money(h.waitingGpv)}</span>
+            </div>
+          ))}
+          <div className="hold-row total"><span>Team</span><span className="mono">{money(team.holdingProspect)}</span><span className="mono">{money(team.holdingWaiting)}</span></div>
+        </div>
 
         {team.movers.length > 0 && (
           <div className="tg-movers">
@@ -1933,5 +1953,13 @@ function Style() {
   .row.excluded{opacity:.5}
   .r-leaving{display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--danger);background:#FBECEA;border-radius:20px;padding:1px 8px;margin-left:2px}
   .leaving-banner{background:#FBECEA;border:1px solid #E7C3BE;color:var(--danger);border-radius:11px;padding:11px 15px;margin-bottom:14px;font-size:13px}
+
+  .holding-card{margin-top:22px;border:1px solid var(--line);border-radius:12px;padding:6px 16px 12px;background:#fff}
+  .hold-row{display:grid;grid-template-columns:1.6fr 1fr 1fr;gap:14px;align-items:center;padding:10px 0;border-top:1px solid var(--line2);font-size:13.5px}
+  .hold-row:not(.head):not(.total){cursor:pointer}
+  .hold-row:not(.head):not(.total):hover{background:#F7F9FC}
+  .hold-row.head{border-top:none;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
+  .hold-row.total{border-top:1.5px solid var(--line);font-weight:600}
+  .hold-rep{font-weight:600;font-family:'Space Grotesk'}
   `}</style>);
 }
