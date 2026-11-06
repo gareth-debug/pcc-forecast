@@ -181,7 +181,7 @@ export default function App() {
     const active = rows.filter((x) => !x.excluded);
     const sum = (k) => active.reduce((s, x) => s + x.t[k], 0);
     const quota = sum("quota"), banked = sum("banked"), pipeline = sum("pipeline"), total = banked + pipeline;
-    const loansAll = sum("loansAll"), loanGoal = sum("loanGoal");
+    const loansAll = sum("loansAll"), loanGoal = sum("loanGoal"), loansCompleted = sum("loansCompleted"), loansPending = sum("loansPending");
     const MONTH_TARGET = 4000000;
     const teamTarget = MONTH_TARGET * inReps.length;
     const months = quarterMonths(q.start, q.end);
@@ -253,7 +253,7 @@ export default function App() {
     const opsQGoalTeam = 15 * inReps.length;
     const gpvQGoalTeam = 12000000 * inReps.length;
     return { rows, quota, banked, pipeline, total, attainment: quota ? total / quota : 0, gap: quota - total,
-      loansAll, loanGoal,
+      loansAll, loanGoal, loansCompleted, loansPending,
       teamTarget, monthData, movers: movers.slice(0, 6), repCount: inReps.length,
       upcoming, activatedList, holding, holdingProspect, holdingWaiting, qStart: q.start, qEnd: q.end, overdueCount, overdueGpv, overdueMonths, todayIso,
       nextSigned, nextLiveManual, nextTotal: nextSigned + nextLiveManual, nextQuotaSum, nqLabel,
@@ -716,7 +716,7 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
             <div className="c-rep"><span className="r-name">{rep.name}</span>{excluded ? <span className="r-leaving">leaving · not in totals</span> : rep.code && <span className="r-code">{rep.code}</span>}</div>
             <div className="c-num mono">{money(t.quota)}</div><div className="c-num mono good">{money(t.banked)}<span className="cell-sub">({pct(t.bankedAtt, 0)})</span></div>
             <div className="c-num mono warn">{money(t.pipeline)}<span className="cell-sub">({t.quota ? pct(t.pipeline / t.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(t.total)}</div>
-            <div className="c-num mono">{money(t.loansAll)}<span className={`cell-sub ${t.loanGoal && t.loansAll >= t.loanGoal ? "good" : ""}`}>({t.loanGoal ? pct(t.loansAll / t.loanGoal, 0) : "0%"})</span></div>
+            <div className="c-num mono">{money(t.loansAll)}<span className={`cell-sub ${t.loanGoal && t.loansAll >= t.loanGoal ? "good" : ""}`}>({t.loanGoal ? pct(t.loansAll / t.loanGoal, 0) : "0%"} of target)</span><span className="cell-sub"><span className="loan-active">{money(t.loansCompleted)} active</span> · {money(t.loansPending)} pending</span></div>
             <div className={`c-num mono ${t.attainment >= 1 ? "good" : ""}`}>{pct(t.attainment, 0)}</div>
             <div className="c-bar"><Bar carried={t.carried} dealPipeline={t.dealPipeline} loansPending={t.loansPending} loansCompleted={t.loansCompleted} overdue={t.overdue} quota={t.quota} /></div>
           </div>
@@ -724,7 +724,7 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
         <div className="row total">
           <div className="c-rep">Total</div><div className="c-num mono">{money(team.quota)}</div><div className="c-num mono good">{money(team.banked)}<span className="cell-sub">({team.quota ? pct(team.banked / team.quota, 0) : "0%"})</span></div>
           <div className="c-num mono warn">{money(team.pipeline)}<span className="cell-sub">({team.quota ? pct(team.pipeline / team.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(team.total)}</div>
-          <div className="c-num mono">{money(team.loansAll)}<span className={`cell-sub ${team.loanGoal && team.loansAll >= team.loanGoal ? "good" : ""}`}>({team.loanGoal ? pct(team.loansAll / team.loanGoal, 0) : "0%"})</span></div>
+          <div className="c-num mono">{money(team.loansAll)}<span className={`cell-sub ${team.loanGoal && team.loansAll >= team.loanGoal ? "good" : ""}`}>({team.loanGoal ? pct(team.loansAll / team.loanGoal, 0) : "0%"} of target)</span><span className="cell-sub"><span className="loan-active">{money(team.loansCompleted)} active</span> · {money(team.loansPending)} pending</span></div>
           <div className="c-num mono">{pct(team.attainment, 0)}</div><div className="c-bar"><Bar banked={team.banked} pipeline={team.pipeline} quota={team.quota} /></div>
         </div>
       </div>
@@ -1907,6 +1907,7 @@ function Style() {
   .nextq-bd-empty{font-size:12.5px;color:var(--muted);padding:6px 0}
 
   .cell-sub{display:block;font-size:10px;font-weight:400;color:var(--muted);margin-top:1px}
+  .loan-active{color:#7C5CBF;font-weight:600}
   .pct-note{color:var(--muted);font-weight:500}
 
   .md-accuracy{background:#F7F9FC;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px}
