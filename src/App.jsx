@@ -677,8 +677,8 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
           <span className="act-note">team target ({team.repCount} reps × $4M)</span>
         </div>
         <div className={`act-card ${team.loanGoal && team.loansAll >= team.loanGoal ? "ok" : "warn"}`}>
-          <span className="act-label">Loans sold</span>
-          <span className="act-val">{money(team.loansAll)} <span className="act-goal">/ {money(team.loanGoal)}</span></span>
+          <span className="act-label">Loan size sold</span>
+          <span className="act-val">{money(team.loansAll / LOAN_REV_RATE)} <span className="act-goal">/ {money(team.loanGoal / LOAN_REV_RATE)}</span></span>
           <span className="act-note">10% of quota target · {team.loanGoal ? pct(team.loansAll / team.loanGoal, 0) : "0%"}</span>
         </div>
       </div>
@@ -937,6 +937,8 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
   const loanGoal = num(rep.quota) * 0.1;
   const loanPct = loanGoal ? loanActual / loanGoal : 0;
   const loanToGoal = t.gap > 0 ? t.gap / LOAN_REV_RATE : 0;
+  const loanGoalSize = loanGoal / LOAN_REV_RATE;   // loan size to sell to hit the 10% target
+  const loanSizeSold = loanActual / LOAN_REV_RATE; // loan size behind what's counted so far
   const scnDeal = scenario ? calcDeal(scenario, q).contribution : 0;
   const scnLoan = scenario && scenario.hasLoan ? num(scenario.loanRevenue) : 0;
   const scnContribution = scnDeal + scnLoan;
@@ -1006,8 +1008,8 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
           <span className="act-note">aiming for {money(GPV_MONTH_GOAL)} a month</span>
         </div>
         <div className={`act-card ${loanActual >= loanGoal ? "ok" : "warn"}`}>
-          <span className="act-label">Loans sold</span>
-          <span className="act-val">{money(loanActual)} <span className="act-goal">/ {money(loanGoal)}</span></span>
+          <span className="act-label">Loan size sold</span>
+          <span className="act-val">{money(loanSizeSold)} <span className="act-goal">/ {money(loanGoalSize)}</span></span>
           <span className="act-note">10% of quota target · {pct(loanPct, 0)}</span>
         </div>
       </div>
@@ -1119,10 +1121,10 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
 
       <Section title="Loans" sub="Enter the loan size — the tool takes the 13.5% fee and your 75% share (10.125% of loan size) toward goal. Pending loans sit in pipeline; tick complete and they move to banked." onAdd={readOnly ? null : addLoan} addLabel="+ Add loan">
         <div className="loan-goal-banner">
-          <span>Loan target <b className="mono">{money(loanGoal)}</b> <span className="muted">— 10% of your {money(num(rep.quota))} quota</span></span>
-          <span className={loanPct >= 1 ? "good strong" : "warn strong"}>{money(loanActual)} so far · {pct(loanPct, 0)}</span>
+          <span>Loan target <b className="mono">{money(loanGoalSize)}</b> of loan size <span className="muted">— 10% of your {money(num(rep.quota))} quota</span></span>
+          <span className={loanPct >= 1 ? "good strong" : "warn strong"}>{money(loanSizeSold)} sold · {pct(loanPct, 0)}</span>
         </div>
-        {t.gap > 0 && <div className="loan-togoal">To hit goal on loans alone, you'd sell <b className="mono">{money(loanToGoal)}</b> of loan size <span className="muted">(13.5% fee, you keep 75%)</span>.</div>}
+        <div className="loan-togoal">{t.gap > 0 ? <>To hit your overall goal on loans alone, sell <b className="mono">{money(loanToGoal)}</b> of loan size <span className="muted">(13.5% fee, you keep 75% = 10.125% toward goal)</span>.</> : <>You're at goal — no more loans needed; anything extra is upside.</>}</div>
         {pendingLoans.length === 0 && <Empty>No open loans logged.</Empty>}
         {pendingLoans.map((l) => (
           <div className="carry-row" key={l.id}>
