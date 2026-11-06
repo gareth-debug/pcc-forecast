@@ -18,6 +18,9 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
    ========================================================================= */
 
 const LOAN_SHARE = 0.75;
+const LOAN_FEE_PCT = 0.135; // fee is 13.5% of loan size
+const LOAN_REV_RATE = LOAN_FEE_PCT * LOAN_SHARE; // rep keeps 75% of the fee = 10.125% of loan size
+function loanRev(l) { return (l && l.loanSize !== undefined && l.loanSize !== null && l.loanSize !== "") ? num(l.loanSize) * LOAN_REV_RATE : num(l.revenue); }
 const STORE_KEY = "pcc-forecast-v3";
 
 const num = (v) => { const n = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(/,/g, "")); return Number.isFinite(n) ? n : 0; };
@@ -75,8 +78,8 @@ function repTotals(rep, q) {
     const c = calcDeal(d, q).contribution;
     if (d.goLive && d.goLive < today) overdue += c; else dealPipeline += c;
   });
-  const loansPending = (rep.loans || []).filter((l) => !l.completed).reduce((s, l) => s + num(l.revenue), 0);
-  const loansCompleted = (rep.loans || []).filter((l) => l.completed).reduce((s, l) => s + num(l.revenue), 0);
+  const loansPending = (rep.loans || []).filter((l) => !l.completed).reduce((s, l) => s + loanRev(l), 0);
+  const loansCompleted = (rep.loans || []).filter((l) => l.completed).reduce((s, l) => s + loanRev(l), 0);
   const loansAll = loansPending + loansCompleted;
   const quota = num(rep.quota);
   const banked = carried + loansCompleted;                 // secured: closed-accounts + completed loans
@@ -244,7 +247,7 @@ export default function App() {
       acts.forEach((d) => { const ad = actDateOfT(d); if (ad && (new Date(ad + "T00:00:00").getFullYear() * 12 + new Date(ad + "T00:00:00").getMonth()) === curMK) { teamOpsMonth += 1; teamGpvMonth += num(d.gpv); repOps += 1; repGpv += num(d.gpv); } });
       const repQOps = acts.length, repQGpv = acts.reduce((s, d) => s + num(d.gpv), 0);
       teamQuarterOps += repQOps; teamQuarterGpv += repQGpv;
-      const rLoans = (r.loans || []).reduce((s, l) => s + num(l.revenue), 0); const rLoanGoal = num(r.quota) * 0.1;
+      const rLoans = (r.loans || []).reduce((s, l) => s + loanRev(l), 0); const rLoanGoal = num(r.quota) * 0.1;
       actByRep.push({ id: r.id, name: r.name, repFirst: (r.name || "").split(",")[0], daysSince: repDays, opsMonth: repOps, gpvMonth: repGpv, quarterOps: repQOps, quarterGpv: repQGpv, loansAll: rLoans, loanGoal: rLoanGoal });
     });
     const avgDaysSince = daysList.length ? Math.round(daysList.reduce((s, x) => s + x, 0) / daysList.length) : null;
@@ -716,7 +719,7 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
             <div className="c-rep"><span className="r-name">{rep.name}</span>{excluded ? <span className="r-leaving">leaving · not in totals</span> : rep.code && <span className="r-code">{rep.code}</span>}</div>
             <div className="c-num mono">{money(t.quota)}</div><div className="c-num mono good">{money(t.banked)}<span className="cell-sub">({pct(t.bankedAtt, 0)})</span></div>
             <div className="c-num mono warn">{money(t.pipeline)}<span className="cell-sub">({t.quota ? pct(t.pipeline / t.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(t.total)}</div>
-            <div className="c-num mono">{money(t.loansAll)}<span className={`cell-sub ${t.loanGoal && t.loansAll >= t.loanGoal ? "good" : ""}`}>({t.loanGoal ? pct(t.loansAll / t.loanGoal, 0) : "0%"} of target)</span><span className="cell-sub"><span className="loan-active">{money(t.loansCompleted)} active</span> · {money(t.loansPending)} pending</span></div>
+            <div className="c-num mono">{money(t.loansAll)}<span className={`cell-sub ${t.loanGoal && t.loansAll >= t.loanGoal ? "good" : ""}`}>({t.loanGoal ? pct(t.loansAll / t.loanGoal, 0) : "0%"} of target)</span><span className="cell-sub"><span className="loan-active">{money(t.loansCompleted)} active</span> · {money(t.loansPending)} pending</span>{t.gap > 0 && <span className="cell-sub">sell {money(t.gap / 0.10125)} for goal</span>}</div>
             <div className={`c-num mono ${t.attainment >= 1 ? "good" : ""}`}>{pct(t.attainment, 0)}</div>
             <div className="c-bar"><Bar carried={t.carried} dealPipeline={t.dealPipeline} loansPending={t.loansPending} loansCompleted={t.loansCompleted} overdue={t.overdue} quota={t.quota} /></div>
           </div>
@@ -724,7 +727,7 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
         <div className="row total">
           <div className="c-rep">Total</div><div className="c-num mono">{money(team.quota)}</div><div className="c-num mono good">{money(team.banked)}<span className="cell-sub">({team.quota ? pct(team.banked / team.quota, 0) : "0%"})</span></div>
           <div className="c-num mono warn">{money(team.pipeline)}<span className="cell-sub">({team.quota ? pct(team.pipeline / team.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(team.total)}</div>
-          <div className="c-num mono">{money(team.loansAll)}<span className={`cell-sub ${team.loanGoal && team.loansAll >= team.loanGoal ? "good" : ""}`}>({team.loanGoal ? pct(team.loansAll / team.loanGoal, 0) : "0%"} of target)</span><span className="cell-sub"><span className="loan-active">{money(team.loansCompleted)} active</span> · {money(team.loansPending)} pending</span></div>
+          <div className="c-num mono">{money(team.loansAll)}<span className={`cell-sub ${team.loanGoal && team.loansAll >= team.loanGoal ? "good" : ""}`}>({team.loanGoal ? pct(team.loansAll / team.loanGoal, 0) : "0%"} of target)</span><span className="cell-sub"><span className="loan-active">{money(team.loansCompleted)} active</span> · {money(team.loansPending)} pending</span>{team.gap > 0 && <span className="cell-sub">sell {money(team.gap / 0.10125)} for goal</span>}</div>
           <div className="c-num mono">{pct(team.attainment, 0)}</div><div className="c-bar"><Bar banked={team.banked} pipeline={team.pipeline} quota={team.quota} /></div>
         </div>
       </div>
@@ -929,10 +932,11 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
   const OPS_GOAL = 5, GPV_MONTH_GOAL = 4000000;
   const pendingLoans = (rep.loans || []).filter((l) => !l.completed);
   const doneLoans = (rep.loans || []).filter((l) => l.completed);
-  const doneLoansTotal = doneLoans.reduce((s, l) => s + num(l.revenue), 0);
-  const loanActual = (rep.loans || []).reduce((s, l) => s + num(l.revenue), 0);
+  const doneLoansTotal = doneLoans.reduce((s, l) => s + loanRev(l), 0);
+  const loanActual = (rep.loans || []).reduce((s, l) => s + loanRev(l), 0);
   const loanGoal = num(rep.quota) * 0.1;
   const loanPct = loanGoal ? loanActual / loanGoal : 0;
+  const loanToGoal = t.gap > 0 ? t.gap / LOAN_REV_RATE : 0;
   const scnDeal = scenario ? calcDeal(scenario, q).contribution : 0;
   const scnLoan = scenario && scenario.hasLoan ? num(scenario.loanRevenue) : 0;
   const scnContribution = scnDeal + scnLoan;
@@ -940,7 +944,7 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
   const projAtt = t.quota ? projTotal / t.quota : 0;
 
   const addDeal = () => up((r) => r.deals.push(blankDeal(q)));
-  const addLoan = () => up((r) => r.loans.push({ id: uid(), name: "", revenue: "" }));
+  const addLoan = () => up((r) => r.loans.push({ id: uid(), name: "", loanSize: "" }));
   const addProspect = () => up((r) => { r.prospects = r.prospects || []; r.prospects.push({ id: uid(), name: "", gpv: "", goLive: q.end }); });
   const patchProspect = (id, p) => up((r) => Object.assign((r.prospects || []).find((x) => x.id === id), p));
   const delProspect = (id) => up((r) => { r.prospects = (r.prospects || []).filter((x) => x.id !== id); });
@@ -1113,17 +1117,18 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
         )}
       </Section>
 
-      <Section title="Loans" sub="Enter the loan revenue amount — that's 75% of the loan fee. Counts as pipeline until you tick it complete; then it drops off and its revenue lives in your closed-accounts total at the top." onAdd={readOnly ? null : addLoan} addLabel="+ Add loan">
+      <Section title="Loans" sub="Enter the loan size — the tool takes the 13.5% fee and your 75% share (10.125% of loan size) toward goal. Pending loans sit in pipeline; tick complete and they move to banked." onAdd={readOnly ? null : addLoan} addLabel="+ Add loan">
         <div className="loan-goal-banner">
           <span>Loan target <b className="mono">{money(loanGoal)}</b> <span className="muted">— 10% of your {money(num(rep.quota))} quota</span></span>
           <span className={loanPct >= 1 ? "good strong" : "warn strong"}>{money(loanActual)} so far · {pct(loanPct, 0)}</span>
         </div>
+        {t.gap > 0 && <div className="loan-togoal">To hit goal on loans alone, you'd sell <b className="mono">{money(loanToGoal)}</b> of loan size <span className="muted">(13.5% fee, you keep 75%)</span>.</div>}
         {pendingLoans.length === 0 && <Empty>No open loans logged.</Empty>}
         {pendingLoans.map((l) => (
           <div className="carry-row" key={l.id}>
             <input className="line-name" placeholder="Loan / client name" value={l.name} onChange={(e) => up((r) => (r.loans.find((x) => x.id === l.id).name = e.target.value))} />
-            <label className="inline-field">Loan revenue (75% of fee)<span className="dollar"><i>$</i><input inputMode="decimal" value={l.revenue} onChange={(e) => up((r) => (r.loans.find((x) => x.id === l.id).revenue = e.target.value))} /></span></label>
-            <div className="contrib warn mono">{money(num(l.revenue))}</div>
+            <label className="inline-field">Loan size<span className="dollar"><i>$</i><input inputMode="decimal" value={l.loanSize !== undefined ? l.loanSize : ""} placeholder={l.loanSize === undefined && l.revenue ? "set directly" : "0"} onChange={(e) => up((r) => { const x = r.loans.find((y) => y.id === l.id); x.loanSize = e.target.value; })} /></span></label>
+            <div className="contrib warn mono">{money(loanRev(l))}<span className="contrib-sub">{num(l.loanSize) > 0 ? `${money(num(l.loanSize) * 0.135)} fee · 75%` : "toward goal"}</span></div>
             <button className={`nowlive-btn ${readOnly ? "" : ""}`} onClick={() => { if (window.confirm(`Mark "${l.name || "this loan"}" complete? It comes off pipeline — its revenue now sits in your closed-accounts total at the top.`)) up((r) => { const x = r.loans.find((y) => y.id === l.id); if (x) x.completed = true; }); }}><span className="nowlive-box" /> Complete?</button>
             <button className="x" onClick={() => up((r) => (r.loans = r.loans.filter((x) => x.id !== l.id)))}>×</button>
           </div>
@@ -1137,7 +1142,7 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
               <div className="activated-row" key={l.id}>
                 <span className="activated-name">{l.name || "Loan"}</span>
                 <span className="activated-meta">complete</span>
-                <span className="activated-gpv mono">{money(num(l.revenue))} rev</span>
+                <span className="activated-gpv mono">{money(loanRev(l))} rev</span>
                 {!readOnly && <button className="ghost sm" onClick={() => up((r) => { const x = r.loans.find((y) => y.id === l.id); if (x) x.completed = false; })}>Undo</button>}
               </div>
             ))}
@@ -1975,5 +1980,7 @@ function Style() {
   .hold-row.head{border-top:none;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
   .hold-row.total{border-top:1.5px solid var(--line);font-weight:600}
   .hold-rep{font-weight:600;font-family:'Space Grotesk'}
+
+  .loan-togoal{font-size:12.5px;color:var(--ink);background:#F4F0FA;border:1px solid #D9CCF0;border-radius:9px;padding:9px 13px;margin-bottom:12px}
   `}</style>);
 }
