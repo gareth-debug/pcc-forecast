@@ -69,18 +69,21 @@ function nextQuarterRollin(rep, q) {
 
 function repTotals(rep, q) {
   const carried = num(rep.carryTotal);
-  const loans = (rep.loans || []).filter((l) => !l.completed).reduce((s, l) => s + num(l.revenue), 0);
   const today = isoDate(new Date());
   let dealPipeline = 0, overdue = 0;
   (rep.deals || []).filter((d) => !d.activated).forEach((d) => {
     const c = calcDeal(d, q).contribution;
     if (d.goLive && d.goLive < today) overdue += c; else dealPipeline += c;
   });
-  const banked = carried;
-  const pipeline = dealPipeline + overdue + loans;
-  const total = banked + pipeline, quota = num(rep.quota);
-  const loansAll = (rep.loans || []).reduce((s, l) => s + num(l.revenue), 0);
-  return { carried, loans, loansAll, loanGoal: quota * 0.1, live: 0, pipeline, overdue, banked, total, quota,
+  const loansPending = (rep.loans || []).filter((l) => !l.completed).reduce((s, l) => s + num(l.revenue), 0);
+  const loansCompleted = (rep.loans || []).filter((l) => l.completed).reduce((s, l) => s + num(l.revenue), 0);
+  const loansAll = loansPending + loansCompleted;
+  const quota = num(rep.quota);
+  const banked = carried + loansCompleted;                 // secured: closed-accounts + completed loans
+  const pipeline = dealPipeline + loansPending + overdue;  // expected + at-risk (for total/gap)
+  const total = banked + pipeline;
+  return { carried, loansPending, loansCompleted, loans: loansPending, loansAll, loanGoal: quota * 0.1,
+    dealPipeline, live: 0, pipeline, overdue, banked, total, quota,
     attainment: quota ? total / quota : 0, bankedAtt: quota ? banked / quota : 0, gap: quota - total };
 }
 
@@ -559,20 +562,25 @@ function MonthCell({ label, prospect, signed, live, target, overdue = 0, onClick
 }
 
 /* ---------- bar ---------- */
-function Bar({ banked, pipeline, overdue = 0, scenario = 0, quota, slim }) {
+function Bar({ carried = 0, dealPipeline = 0, loansPending = 0, loansCompleted = 0, overdue = 0, scenario = 0, quota, slim }) {
   const q = quota || 1;
-  const amber = Math.max(0, pipeline - overdue);
-  const b = Math.min((banked / q) * 100, 100);
-  const p = Math.min((amber / q) * 100, Math.max(0, 100 - b));
-  const o = Math.min((overdue / q) * 100, Math.max(0, 100 - b - p));
-  const s = Math.min((scenario / q) * 100, Math.max(0, 100 - b - p - o));
+  let used = 0;
+  const seg = (v) => { const w = Math.min((v / q) * 100, Math.max(0, 100 - used)); const left = used; used += w; return { left, w }; };
+  const C = seg(carried);        // green  — closed accounts
+  const LC = seg(loansCompleted); // solid purple — loans banked
+  const DP = seg(dealPipeline);  // amber  — signed deals
+  const LP = seg(loansPending);  // hatched purple — loans pending
+  const O = seg(overdue);        // red    — at risk
+  const S = seg(scenario);       // blue   — scenario (transient)
   return (
     <div className={`bar ${slim ? "slim" : ""}`}>
       <div className="bar-track">
-        <div className="seg banked" style={{ width: `${b}%` }} />
-        <div className="seg pipeline" style={{ left: `${b}%`, width: `${p}%` }} />
-        {overdue > 0 && <div className="seg overdue" style={{ left: `${b + p}%`, width: `${o}%` }} />}
-        {scenario > 0 && <div className="seg scenario" style={{ left: `${b + p + o}%`, width: `${s}%` }} />}
+        <div className="seg banked" style={{ left: `${C.left}%`, width: `${C.w}%` }} />
+        {loansCompleted > 0 && <div className="seg loancomplete" style={{ left: `${LC.left}%`, width: `${LC.w}%` }} />}
+        <div className="seg pipeline" style={{ left: `${DP.left}%`, width: `${DP.w}%` }} />
+        {loansPending > 0 && <div className="seg loanpending" style={{ left: `${LP.left}%`, width: `${LP.w}%` }} />}
+        {overdue > 0 && <div className="seg overdue" style={{ left: `${O.left}%`, width: `${O.w}%` }} />}
+        {scenario > 0 && <div className="seg scenario" style={{ left: `${S.left}%`, width: `${S.w}%` }} />}
         <div className="goal" />
       </div>
     </div>
@@ -710,7 +718,7 @@ function TeamView({ team, onPick, onOpenDeal, onReset, readOnly, onCloseQuarter 
             <div className="c-num mono warn">{money(t.pipeline)}<span className="cell-sub">({t.quota ? pct(t.pipeline / t.quota, 0) : "0%"})</span></div><div className="c-num mono strong">{money(t.total)}</div>
             <div className="c-num mono">{money(t.loansAll)}<span className={`cell-sub ${t.loanGoal && t.loansAll >= t.loanGoal ? "good" : ""}`}>({t.loanGoal ? pct(t.loansAll / t.loanGoal, 0) : "0%"})</span></div>
             <div className={`c-num mono ${t.attainment >= 1 ? "good" : ""}`}>{pct(t.attainment, 0)}</div>
-            <div className="c-bar"><Bar banked={t.banked} pipeline={t.pipeline} overdue={t.overdue} quota={t.quota} /></div>
+            <div className="c-bar"><Bar carried={t.carried} dealPipeline={t.dealPipeline} loansPending={t.loansPending} loansCompleted={t.loansCompleted} overdue={t.overdue} quota={t.quota} /></div>
           </div>
         ))}
         <div className="row total">
@@ -973,7 +981,7 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
         <Kpi label="Total forecast" value={money(t.total)} tone="accent" />
         <Kpi label="Attainment" value={pct(t.attainment)} tone={t.attainment >= 1 ? "good" : ""} />
         <Kpi label="Banked now" value={money(t.banked)} tone="good" hint={`${pct(t.bankedAtt, 0)} of goal secured`} />
-        <Kpi label="From loans" value={money(t.loans)} hint="loan revenue — inside pipeline" />
+        <Kpi label="From loans" value={money(t.loansAll)} hint="completed = banked · pending = pipeline" />
         <Kpi label={t.gap >= 0 ? "Still to find" : "Over goal by"} value={money(Math.abs(t.gap))} tone={t.gap <= 0 ? "good" : "warn"} />
       </div>
 
@@ -1007,11 +1015,11 @@ function RepView({ rep, q, up, onDelRep, readOnly, focus }) {
       </div>
 
       <div className="herobar">
-        <Bar banked={t.banked} pipeline={t.pipeline} overdue={t.overdue} scenario={scnContribution} quota={t.quota} />
+        <Bar carried={t.carried} dealPipeline={t.dealPipeline} loansPending={t.loansPending} loansCompleted={t.loansCompleted} overdue={t.overdue} scenario={scnContribution} quota={t.quota} />
         <div className="hero-legend">
-          <span><i className="sw good" /> Banked {money(t.banked)} <span className="pct-note">({pct(t.bankedAtt, 0)} of goal)</span></span>
-          <span><i className="sw warn" /> Signed deals {money(Math.max(0, t.pipeline - t.overdue - t.loans))} <span className="pct-note">({t.quota ? pct(Math.max(0, t.pipeline - t.overdue - t.loans) / t.quota, 0) : "0%"} of goal)</span></span>
-          {t.loans > 0 && <span><i className="sw loanmark" /> Loans {money(t.loans)} <span className="pct-note">({t.quota ? pct(t.loans / t.quota, 0) : "0%"} of goal)</span></span>}
+          <span><i className="sw good" /> Closed accts {money(t.carried)} <span className="pct-note">({t.quota ? pct(t.carried / t.quota, 0) : "0%"} of goal)</span></span>
+          <span><i className="sw warn" /> Signed deals {money(t.dealPipeline)} <span className="pct-note">({t.quota ? pct(t.dealPipeline / t.quota, 0) : "0%"} of goal)</span></span>
+          {t.loansAll > 0 && <span><i className="sw loan" /> Loans {money(t.loansAll)} <span className="pct-note">({t.quota ? pct(t.loansAll / t.quota, 0) : "0%"} of goal{t.loansCompleted > 0 || t.loansPending > 0 ? ` · ${money(t.loansCompleted)} done, ${money(t.loansPending)} pending` : ""})</span></span>}
           {t.overdue > 0 && <span><i className="sw atrisk" /> At risk {money(t.overdue)} <span className="pct-note">({t.quota ? pct(t.overdue / t.quota, 0) : "0%"} of goal)</span></span>}
           {scenario && <span><i className="sw scn" /> If signed {money(scnContribution)}</span>}
           <span className="goal-lbl">Goal {money(t.quota)}</span>
@@ -1194,11 +1202,11 @@ function quarterMonths(qStart, qEnd) {
 
 function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, onDelProspect, onPromoteProspect, repSurname }) {
   const [openMonth, setOpenMonth] = useState(null);
-  if (t.quota <= 0) return null;
   const MONTH_TARGET = 4000000;
+  const noGoal = t.quota <= 0;
   const list = prospects || [];
   const allDeals = deals || [];
-  const behind = t.gap > 0;
+  const behind = !noGoal && t.gap > 0;
   const MONTH_TARGET_TXT = MONTH_TARGET;
 
   // total GPV in play across all this rep's deals (signed pipeline + activated), always shown
@@ -1251,7 +1259,9 @@ function PathToGoal({ t, q, deals, prospects, onAddProspect, onPatchProspect, on
   return (
     <div className={`section pathgoal ${behind ? "" : "ongoal"}`}>
       <h2>Path to goal</h2>
-      {behind ? (
+      {noGoal ? (
+        <div className="pg-clear">No quota set yet — re-ramping. Build your pipeline and prospects below; your $4M/month go-live plan still applies. Set a goal on your tab to unlock the gap tracker.</div>
+      ) : behind ? (
         <div className={`gapbar-card ${stillShort <= 0 ? "covered" : ""}`}>
           <div className="gapbar-top">
             <span className="gap-label">{stillShort > 0 ? "Still short to hit goal (if live now)" : "Prospects cover it — but nothing's signed yet"}</span>
@@ -1516,7 +1526,9 @@ function Style() {
   .seg{position:absolute;top:0;bottom:0;transition:width .2s,left .2s}
   .seg.banked{left:0;background:var(--good)}
   .seg.pipeline{background:var(--warn);opacity:.85}
-  .seg.scenario{background:repeating-linear-gradient(45deg,var(--scn),var(--scn) 5px,#9B72D4 5px,#9B72D4 10px)}
+  .seg.scenario{background:#3B82C4}
+  .seg.loancomplete{background:#7C5CBF}
+  .seg.loanpending{background:repeating-linear-gradient(45deg,#7C5CBF,#7C5CBF 5px,#C9B8EC 5px,#C9B8EC 10px)}
   .goal{position:absolute;top:-2px;bottom:-2px;left:calc(100% - 2px);width:2px;background:var(--ink)}
   /* rep head */
   .rep-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:20px}
@@ -1538,7 +1550,8 @@ function Style() {
   .seg.overdue{background:var(--danger)}
   .hero-legend .muted{color:var(--muted)}
   .hero-legend .sw.loanmark{background:#F4D69B;border:1px solid #E4A94D}
-  .sw.good{background:var(--good)} .sw.warn{background:var(--warn)} .sw.scn{background:var(--scn)}
+  .sw.good{background:var(--good)} .sw.warn{background:var(--warn)} .sw.scn{background:#3B82C4}
+  .hero-legend .sw.loan{background:#7C5CBF}
   .goal-lbl{margin-left:auto;font-family:'JetBrains Mono';color:var(--ink);font-weight:600}
   /* scratchpad */
   .scratch{border:1.5px solid var(--scn);background:var(--scn-soft);border-radius:15px;padding:20px;margin-bottom:30px}
